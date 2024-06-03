@@ -20,6 +20,7 @@ library(knitr)
 #library(mgcv)
 library(glmmTMB)
 library(DHARMa)
+library(broom.mixed)
 library(ggeffects)
 library(sjPlot)
 library(patchwork)
@@ -37,6 +38,7 @@ Load data
 sdls <- read_rds("data/kadumane_seedlings.rds")
 site_dat <- read_rds("data/kadumane_site_metadata.rds")
 plot_dat <- read_rds("data/kadumane_plot_metadata.rds")
+sp_codes <- read_csv("data/species_names.csv")
 ```
 
 1. Join in site and plot meta-data.
@@ -55,10 +57,10 @@ sdls <-  sdls |> left_join(site_dat) |> left_join(plot_dat) |>
 ## find species with enough individuals and variation in density to allow 
 ## analysis
 sp_list <- group_by(sdls, species) |> 
-  summarise(n = sum(census.start > 0), ## number of plots withe species
-            sd_dens = sd(census.start[census.start > 0])) |> ## variation in density 
+  summarise(abund = sum(census.start) ,  ## total abund
+            n = sum(census.start > 0), ## number of plots withe species
+            sd_dens = sd(census.start[census.start > 0])) |> ##var in density
   filter(n > 1) |> arrange(n)
-
 ## only lose 8 species by restricting to 5 or more occurrences (instead of 1)
 ## Seems reasonable. Also removing species that were unreliably identified.
 ## 
@@ -101,8 +103,7 @@ sdls <- mutate(sdls,
                Pr_s = 1 - Pr_m,
                con_dens = census.start,
                con_dens_s = con_dens/sp_mean_dens,
-               across(c(proportion.connectivity, slope.degrees),
-                      ~as.vector(scale(.x)), .names = "{.col}_s"),
+               slope.degrees_s = as.vector(scale(slope.degrees)),
                 trt_F = factor(trt_F, labels = c("0", "F")),
                 trt_I = factor(trt_I, labels = c("0", "I"))
                )
@@ -125,7 +126,7 @@ Also including slope of plot and random intercepts for plot, nested in location,
 nested in site. Random slopes and intercepts are included for each species to
 examine how density dependence varies among species.
 
-```{r fit_model}
+```{r fit_model, eval = FALSE, include = FALSE}
 # species random intercept and slope
 m_cdd_ris <- glmmTMB(Pr_s ~ slope.degrees_s + 
                        (scale(tot_dens) + scale(con_dens)) * 
@@ -145,85 +146,19 @@ m_cdd_ri <- glmmTMB(Pr_s ~ slope.degrees_s +
                       (1|site/loc/gr/plot), 
                     weights = census.start, data = sdls, 
                     family=binomial)
-# species random intercept and slope
-m_logcdd_ris <- glmmTMB(Pr_s ~ slope.degrees_s + 
-                   (scale(log(tot_dens)) + scale(log(con_dens))) * 
-                      (trt_I + trt_F) *  scale(fragment.size) +
-                   (scale(log(con_dens)) + scale(log(tot_dens))||species) +  
-                   (1|site/loc/gr/plot), 
-                 weights = census.start, data = sdls, 
-                 family=binomial)
-# species random intercept only
-m_logcdd_ri <- glmmTMB(Pr_s ~ slope.degrees_s + 
-                   (scale(log(tot_dens)) + scale(log(con_dens))) * 
-                      (trt_I + trt_F) *  scale(fragment.size) +
-                   (1|species) +  
-                   (1|site/loc/gr/plot), 
-                 weights = census.start, data = sdls, 
-                 family=binomial)
-AIC(m_cdd_ris, m_cdd_ri, m_logcdd_ris, m_logcdd_ri)
-## non-logged version a bit better.
+AIC(m_cdd_ris, m_cdd_ri)
+## random-intercept only version a bit better.
 ```
 
 Note that including the insecticide x fungicide interaction causes convergence
 problems and doesn't seem to be important either. Removing for practicality.
 
-### Scaled conspecific density models
+###  Model diagnostics
 
-The most abundant species initially will often have lower survival (fecundity/
-survival trade-off). This could generate what looks like a density-dependent 
-relationship when looking across species, even without a relationship 
-within species (i.e., Simpson's paradox). 
-```{r abundance_survival}
-
-ggplot(sp_mean_dens, aes(x = log(sp_mean_dens), y = sp_mean_surv)) +
-  geom_label(aes(label= species)) + geom_smooth(method = "lm") + theme_tufte()
-#  scale_x_continuous(trans = "log")
-## not the clearest pattern, but worth accounting for.
-
-(ggplot(sdls, aes(x = scale(log(con_dens_s)), colour = species)) + geom_density())/
-(ggplot(sdls, aes(x = scale(log(con_dens)), colour = species)) + geom_density()) + plot_layout(guides = "collect")
-
-```
-
-
-
-To account for this, we can scale conspecific density by dividing by mean
-density and refitting the models.
-
-```{r fit_scaled_models}
-## models using scaled density
-m_cdd_s_ris <- glmmTMB(Pr_s ~ slope.degrees_s + 
-                       (scale(tot_dens) + scale(con_dens_s)) * 
-                       (trt_I + trt_F) *
-                       scale(fragment.size) +
-                       (scale(con_dens_s) + scale(tot_dens)||species) +
-                       ## setting cor to 0 to converge 
-                       (1|site/loc/gr/plot), 
-                     weights = census.start, data = sdls, 
-                     family=binomial)
-
-m_logcdd_s_ris <- glmmTMB(Pr_s ~ slope.degrees_s + 
-                       (scale(log(tot_dens)) + scale(log(con_dens_s))) * 
-                       (trt_I + trt_F) *
-                       scale(fragment.size) +
-                       (scale(log(con_dens_s)) + scale(log(tot_dens))||species) +
-                       ## setting cor to 0 to converge 
-                       (1|site/loc/gr/plot), 
-                     weights = census.start, data = sdls, 
-                     family=binomial)
-
-AIC(m_logcdd_s_ris, m_cdd_s_ris) ## comparable.
-```
-
-##  Model diagnostics
-
-```{r diagnostics}
+```{r diagnostics, eval = FALSE, include = FALSE}
 ## no evidence of variation among species
 res <- simulateResiduals(m_cdd_ri)
 plot(res)
-res_log <- simulateResiduals(m_logcdd_ri)
-plot(res_log) ## slightly less convincing, but acceptable
 
 
 ## look at relationship with covariates
@@ -248,103 +183,27 @@ ggplot(diag_dat, aes(x = con_dens, y = res)) +
   geom_point(aes(colour = species)) +
   geom_smooth(method="gam") ## no trend with treatment
 
-
-diag_datlog <- data.frame(m_logcdd_ri$frame, res = res_log$fittedResiduals)
-diag_datlog <-   rename_with(diag_datlog, ~ str_replace(.x, "scale\\.", "")) |> 
-  rename_with(~str_replace(.x, "\\.$", "")) |> 
-  rename_with(~str_replace(.x, "\\.$", ""))
-names(diag_datlog)
-
-ggplot(diag_datlog, aes(x = log.con_dens, y = res)) +  
-  geom_point(aes(colour = species)) + 
-  geom_hline(yintercept=0, linetype = "dashed") +
-  geom_smooth(method="gam") ## slight trend. 
-
-
-ggplot(diag_datlog, aes(x = log.con_dens, y = res, colour = trt_F)) + 
-  facet_wrap(~species) +
-  geom_point() + geom_smooth(method="gam") ## no indication of a problem
-
-
 ```
 
-## Take-homes
+### Take-homes
 
 * Model diagnostics are generally good.
-* Lower AIC for log density version. 
 * Diagnostics are slightly better for non-logged version. Logged version has
-some evidence of quantiles deviating from expectations. 
+some evidence of quantiles deviating from expectations (removed logged
+version now). 
 * No evidence of trends between covariates and residuals. 
 
 The log density model has a slightly lower AIC. A little poking around 
 (not shown) suggests that excluding the largest values reverses this order, 
 so that the non-logged version is better. 
 
-Looks like the two models lead to roughly similar interpretation (below).
+Looks like the two models lead to roughly similar interpretation.
 
-```{r diag_scaled}
-res_s <- simulateResiduals(m_cdd_s_ris)
-plot(res_s) ## ok - some deviation from ideal residual distribution
-res_log_s <- simulateResiduals(m_logcdd_s_ris)
-plot(res_log_s) ## not as good.
-
-
-## look at relationship with covariates
-diag_dat <- data.frame(m_cdd_s_ris$frame, res = res_s$fittedResiduals)
-
-diag_dat <-   rename_with(diag_dat, ~ str_replace(.x, "scale\\.", "")) |> 
-  rename_with(~str_replace(.x, "\\.$", "")) 
-
-ggplot(diag_dat, aes(x = con_dens_s, y = res)) +  
-  geom_point(aes(colour = species)) + 
-  geom_hline(yintercept=0, linetype = "dashed") +
-  geom_smooth(method="gam") ## no clear trend. 
-
-ggplot(diag_dat, aes(x = fragment.size, y = res)) +  
-  geom_point(aes(colour = species), position = "jitter") + 
-  geom_hline(yintercept=0, linetype = "dashed") +
-  geom_smooth(method="gam") ## no clear trend. 
-
-ggplot(diag_dat, aes(x = con_dens_s, y = res)) +  
-  facet_wrap(~trt_F + trt_I ) +
-  geom_point(aes(colour = species)) +
-  geom_smooth(method="gam") ## no trend with treatment
-
-## Logged version
-## 
-diag_dat <- data.frame(m_logcdd_s_ris$frame, res = res_log_s$fittedResiduals)
-
-diag_dat <-   rename_with(diag_dat, ~ str_replace(.x, "scale\\.", "")) |> 
-  rename_with(~str_replace(.x, "\\.$", "")) 
-
-ggplot(diag_dat, aes(x = log.con_dens_s., y = res)) +  
-  geom_point(aes(colour = species)) + 
-  geom_hline(yintercept=0, linetype = "dashed") +
-  geom_smooth(method="gam") ## bit of a trend 
-
-ggplot(diag_dat, aes(x = fragment.size, y = res)) +  
-  geom_point(aes(colour = species), position = "jitter") + 
-  geom_hline(yintercept=0, linetype = "dashed") +
-  geom_smooth(method="gam") ## no clear trend. 
-
-ggplot(diag_dat, aes(x = log.con_dens_s., y = res)) +  
-  facet_wrap(~trt_F + trt_I ) +
-  geom_point(aes(colour = species)) +
-  geom_smooth(method="gam") ## bit of a trend in control and both 
-# biocides treatments
-
-```
-
-The diagnostics aren't as perfect in the scaled case, but the scaled version
-does seem to be sensible given the massive differences in density.
-
-## Model inference
-
-### Non-scaled model 
+### Inference
 
 The fixed effects
 
-```{r inference}
+```{r inference, eval = FALSE, include = FALSE}
 ## Non-logged version
 summary(m_cdd_ri)
 terms_cdd <- names(fixef(m_cdd_ri)$cond)
@@ -369,19 +228,8 @@ plot(ggpredict(m_cdd_ri, terms=c("con_dens[1:100, by=0.1]",
                               "trt_F",
                               "fragment.size[1, 50, 100]"))) + theme_tufte()
 
-## Logged version
+## more formal figure
 
-summary(m_logcdd_ri)
-                                     
-terms_logcdd <- names(fixef(m_logcdd_ri)$cond)
-sjPlot::plot_model(m_logcdd_ri, 
-                   rm.terms = c("slope.degrees_s", 
-                                terms_logcdd[str_detect(terms_logcdd, "tot")]),
-                   group.terms= trt_cols, colors="Set2")
-
-plot(ggpredict(m_logcdd_ri, terms=c("con_dens[1:100, by = 1]", 
-                              "trt_F",
-                              "fragment.size[1, 50, 100]"))) + theme_tufte()
 p_cdd_ri <- predict_response(m_cdd_ri, 
                                 terms=c("con_dens[1:100, by = 1]", 
                                         "trt_F", "trt_I", 
@@ -420,8 +268,7 @@ pl_cdd <- ggplot(filter(p_cdd_ri, trt !="FI"),
   scale_fill_brewer(palette="Set2") +
   labs(x = expression(Conspecific~density~(m^-2)), y = "Pr(Survival)", 
        colour = "Treatment", fill = "Treatment")
-pl_cdd
-tp_cdd_ri
+pl_cdd | tp_cdd_ri
 ```
 
 Main conclusions
@@ -432,77 +279,204 @@ Main conclusions
 and fungicide addition, so that the reduction in protection at high densities
 is more evident in larger fragments.
 
-### Scaled model 
+
+## Scaled conspecific density models
+
+The most abundant species initially will often have lower survival (fecundity/
+survival trade-off). This could generate what looks like a density-dependent 
+relationship when looking across species, even without a relationship 
+within species (i.e., Simpson's paradox). 
+
+```{r abundance_survival}
+ggplot(sp_mean_dens, aes(x = log(sp_mean_dens), y = sp_mean_surv)) +
+  geom_label(aes(label= species)) + geom_smooth(method = "lm") + theme_tufte()
+
+## not the clearest pattern, but worth accounting for.
+(ggplot(sdls, aes(x = scale((con_dens_s)), colour = species)) + geom_density())/
+(ggplot(sdls, aes(x = scale((con_dens)), colour = species)) + geom_density()) + plot_layout(guides = "collect")
+```
+
+To account for this, we can scale conspecific density by dividing by mean
+density and refitting the models.
+
+```{r fit_scaled_models}
+## models using species-scaled density
+## 
+## Random intercept model
+m_cdd_s_ri <- glmmTMB(Pr_s ~ slope.degrees_s + 
+                       (scale(tot_dens) + scale(con_dens_s)) * 
+                       (trt_I + trt_F) *
+                       scale(log(fragment.size)) +
+                       (1|species) +
+                       (1|site/loc/gr/plot), 
+                     weights = census.start, data = sdls, 
+                     family=binomial)
+## Random intercept and slope model for species specific effects
+m_cdd_s_ris <- glmmTMB(Pr_s ~ slope.degrees_s + 
+                       (scale(tot_dens) + scale(con_dens_s)) * 
+                       (trt_I + trt_F) * scale(log(fragment.size)) * 
+                       (scale(con_dens_s) + scale(tot_dens)||species) +
+                       ## setting cor to 0 to converge 
+                       (1|site/loc/gr/plot), 
+                     weights = census.start, data = sdls, 
+                     family=binomial)
+anova(m_cdd_s_ri, m_cdd_s_ris) ## random slope *much* better
+```
+
+Models fit without issues as long as we fix the covariance between random slopes
+and intercepts to 0. 
+
+The improvment with the random slopes model suggests we need to look at 
+individual species.
+
+### Diagnostics
+
+```{r diag_scaled}
+res_s <- simulateResiduals(m_cdd_s_ri)
+plot(res_s) ## ok - some deviation from ideal residual distribution
+
+## look at relationship with covariates
+diag_dat <- data.frame(m_cdd_s_ri$frame, res = res_s$fittedResiduals)
+
+diag_dat <-   rename_with(diag_dat, ~ str_replace(.x, "scale\\.", "")) |> 
+  rename_with(~str_replace(.x, "\\.$", "")) 
+
+ggplot(diag_dat, aes(x = con_dens_s, y = res)) +  
+  geom_point(aes(colour = species)) + 
+  geom_hline(yintercept=0, linetype = "dashed") +
+  geom_smooth(method="gam") ## no trend. 
+
+ggplot(diag_dat, aes(x = log.fragment.size., y = res)) +  
+  geom_point(aes(colour = species), position = "jitter") + 
+  geom_hline(yintercept=0, linetype = "dashed") +
+  geom_smooth(method="gam") ## no trend. 
+
+ggplot(diag_dat, aes(x = con_dens_s, y = res)) +  
+  facet_wrap(~trt_F + trt_I ) +
+  geom_point(aes(colour = species)) +
+  geom_smooth(method="gam") ## no trend with treatment
+
+```
+
+The diagnostics aren't as perfect in the scaled case, but the scaled version
+does seem to be sensible given the massive differences in density.
+
+### Model inference
 
 ```{r inference_scaled}
-## Non-logged version
-summary(m_cdd_s_ris)
-plot_model(m_cdd_s_ris, show.values=TRUE )
+summary(m_cdd_s_ri)
+plot_model(m_cdd_s_ri, show.values=TRUE )
 
-## obvious effects of conspeicfic density. Less clear effect of 
-## fungicide x condens. But perhaps that is partly due to interactions. 
-## Examining a simpler model (no 3-way interactions)
-summary(update(m_cdd_s_ris, ~.-(trt_F + trt_I):scale(fragment.size):
-                 (scale(con_dens_s) + scale(tot_dens))))
-plot_model(update(m_cdd_s_ris, ~.-(trt_F + trt_I):scale(fragment.size):
-                 (scale(con_dens_s) + scale(tot_dens))))
-## There is a tendency for fungicide to have a bigger effect in large
-## fragments. Examine effects when split up by fragment size
+```
 
-## models using scaled density
+### Take-homes:
 
-m_cdd_s_ris_frag <- lapply(split(sdls, 
-                                 f= cut(sdls$fragment.size, 
-                                        quantile(site_dat$fragment.size, 
-                                                 c(0, 0.25, 0.5, 0.75, 1)), 
-                                        include.lowest=TRUE)), 
+* Survival is negatively conspecific density dependent
+* Fungicide reduces the density dependence (P = 0.03). Note that the magnitude
+of the effect (0.21) is 2/3rds of the overall conspecific density effect
+(-0.32). Worth remarking on in the results.
+* CDD strengthens significantly with fragment area (P = 0.017).
+* The interaction between fungicide, fragment area and CDD is not significant,
+but its estimated magnitude (0.117) is almost equal (and opposite direction) to
+the interaction between fragment area and density (-0.121). 
+
+* Worth noting that survival also increases with total stem density, with a 
+similar magnitude as with conspecific density.
+* Survival also declines with fragment area.
+* Insecticide increases survival independent of density, and its effect 
+increases with fragment area.
+
+### Models split by categorical fragment size 
+
+The effect of fragment
+
+```{r mod_by_fragsize}
+# Using 3 categories
+sdls <- mutate(sdls, 
+               frag_sizeclass3 = cut(fragment.size, 
+                                     quantile(site_dat$fragment.size, 
+                                              c(0, 0.33, 0.66, 1)), 
+                                        include.lowest=TRUE))
+
+m_cdd_s_ri_frag <- lapply(split(sdls, f= sdls$frag_sizeclass3), 
                            function(d){
                              glmmTMB(Pr_s ~ slope.degrees_s + 
                                        (scale(tot_dens) + scale(con_dens_s)) * 
                                        (trt_I + trt_F) +
-                                       (scale(con_dens_s) + 
-                                          scale(tot_dens)||species) +
+                                       (1|species) +
                                        ## setting cor to 0 to converge 
                                        (1|site/loc/gr/plot), 
                                      weights = census.start, data = d, 
                                      family=binomial)})
+term_nms <- names(fixef(m_cdd_s_ri_frag[[1]])$cond) 
 
-plot_models(m_cdd_s_ris_frag, show.values=TRUE, 
-            m.labels=names(m_cdd_s_ris_frag))
-lapply(m_cdd_s_ris_frag, summary)
+plot_models(m_cdd_s_ri_frag, show.values=TRUE,
+            rm.terms=c("slope.degrees_s", 
+            term_nms[str_detect(term_nms, "tot")]), ## declutter
+            m.labels=names(m_cdd_s_ri_frag))
+map(m_cdd_s_ri_frag, summary)
+
+## What about a single model with categorical fragment sizes
+
+m_cdd_s_cat_ri <- glmmTMB(Pr_s ~ slope.degrees_s + 
+                       (scale(tot_dens) + scale(con_dens_s)) * 
+                       (trt_I + trt_F) *
+                       frag_sizeclass3 +
+                       (1|species) +
+                       ## setting cor to 0 to converge 
+                       (1|site/loc/gr/plot), 
+                     weights = census.start, data = sdls, 
+                     family=binomial)
+summary(m_cdd_s_cat_ri)
+car::Anova(m_cdd_s_cat_ri)
 
 ```
 
-```{r plots}
-terms_cdd <- names(fixef(m_cdd_s_ris)$cond)
-#sjPlot::plot_model(m_cdd) ## bit busy
-trt_cols <- terms_cdd[-c(1:2)]
-trt_cols <- trt_cols[!str_detect(trt_cols, "tot")] 
-trt_cols <- case_when(
-  str_detect(trt_cols, "trt_II") ~  "Insecticide",
-  str_detect(trt_cols, "trt_FF") ~ "Fungicide",
-  .default =  "Control")
+### Take-homes
 
-labs <-  c("ConDens", "I", "F", "FragArea",
-              "ConDens x I", "ConDens x F", "FragArea x\n ConDens",
-              "FragArea x I"  , "FragArea x F", 
-              "FragArea x\n(ConDens x I)", 
-              "FragArea x\n(ConDens x F)")
+The effect of fragment area is complex. 
+* Density dependence is only present in large fragments.
+* Fungicide removes the effect in these large fragments. 
 
+Although the interaction between fragment size and cdd and fungicide is
+not significantly different from 0, this is owed more to its uncertainty than
+its magnitude. 
+
+### Graphics
+
+```{r plots_scaled}
+#####
+# terms_cdd <- names(fixef(m_cdd_s_ris)$cond)
+# #sjPlot::plot_model(m_cdd) ## bit busy
+# trt_cols <- terms_cdd[-c(1:2)]
+# trt_cols <- trt_cols[!str_detect(trt_cols, "tot")] 
+# trt_cols <- case_when(
+#   str_detect(trt_cols, "trt_II") ~  "Insecticide",
+#   str_detect(trt_cols, "trt_FF") ~ "Fungicide",
+#   .default =  "Control")
+
+#####
+labs <-  c("ConDens", "I", "F", "log(FragArea)",
+              "ConDens:I", "ConDens:F", "log(FragArea):\n ConDens",
+              "log(FragArea):I"  , "log(FragArea):F", 
+              "log(FragArea):\n (ConDens:I)", 
+              "log(FragArea):\n (ConDens:F)")
 tp_cdd_s_ris <- 
-    sjPlot::plot_model(m_cdd_s_ris, 
-                       rm.terms = c("slope.degrees_s", 
-                                    terms_cdd[str_detect(terms_cdd, "tot")]),
-                       group.terms= trt_cols)
-
-tp_cdd_s_ris <- tp_cdd_s_ris$data   |> 
-  mutate(term = factor(labs, levels = rev(labs))) |> 
-  ggplot(aes(y = term, x = estimate, xmin = conf.low, xmax = conf.high, 
-             colour = group)) + 
+  tidy(m_cdd_s_ris, conf.int = TRUE) |> 
+  filter(effect == "fixed", 
+         !str_detect(term, "tot_dens"), 
+         !term %in% c("(Intercept)", "slope.degrees_s")) |> 
+  mutate(labels = factor(labs, levels = rev(labs)), 
+         Biocide = case_when(
+           str_detect(term, "trt_II") ~  "Insecticide",
+           str_detect(term, "trt_FF") ~ "Fungicide",
+           .default =  "Control")) |> 
+  ggplot(aes(y = labels, x = estimate, xmin = conf.low, xmax = conf.high, 
+             colour = Biocide)) + 
   geom_pointrange() +
-  geom_vline(xintercept=1, linetype = "dotted") +
-  scale_colour_brewer(palette="Set2", name="Treatment") +
-  labs(y = NULL, x = "Odds ratio")  + 
+  geom_vline(xintercept=0, linetype = "dotted") +
+  scale_colour_brewer(palette="Set2") +
+  labs(y = NULL, x = "log(odds ratio)")  + 
   guides(colour = guide_legend(position = "top", direction = "horizontal", 
                                title.position = "top", title.hjust = 0.5)) +
   theme(
@@ -511,36 +485,34 @@ tp_cdd_s_ris <- tp_cdd_s_ris$data   |>
     legend.location = "plot",
     plot.title.position = "plot"
   )                                        
-  
-tp_cdd_s_ris 
-
-quantile(sdls$con_dens_s, seq(0, 1, 0.1))
-quantile(site_dat$fragment.size, seq(0, 1, 0.1))
-plot(ggpredict(m_cdd_s_ris, terms=c("con_dens_s[1:80, by=0.1]", 
-                              "trt_F",
-                              "fragment.size[1, 50, 100]"))) + theme_tufte()
-
-## Logged version
-
-summary(m_logcdd_s_ris)
-                                     
-terms_logcdd <- names(fixef(m_logcdd_s_ris)$cond)
-sjPlot::plot_model(m_logcdd_s_ris, 
-                   rm.terms = c("slope.degrees_s", 
-                                terms_logcdd[str_detect(terms_logcdd, "tot")]),
-                   group.terms= trt_cols, colors="Set2")
-
-plot(ggpredict(m_logcdd_s_ris, terms=c("con_dens_s[1:80, by = 1]", 
-                              "trt_F",  
-                              "fragment.size[1, 50, 100]"))) + theme_tufte()
-
-## given that the diagnostics were better for the untransformed scale
-## model, using that for a more comprehensive plot
-
+tp_cdd_s_ris
+#####
+# tp_cdd_s_ris <- 
+#     sjPlot::plot_model(m_cdd_s_ris, 
+#                        rm.terms = c("slope.degrees_s", 
+#                                     terms_cdd[str_detect(terms_cdd, "tot")]),
+#                        group.terms= trt_cols)
+# tp_cdd_s_ris <- tp_cdd_s_ris$data   |> 
+#   mutate(term = factor(labs, levels = rev(labs))) |> 
+#   ggplot(aes(y = term, x = estimate, xmin = conf.low, xmax = conf.high, 
+#              colour = group)) + 
+#   geom_pointrange() +
+#   geom_vline(xintercept=1, linetype = "dotted") +
+#   scale_colour_brewer(palette="Set2", name="Treatment") +
+#   labs(y = NULL, x = "Odds ratio")  + 
+#   guides(colour = guide_legend(position = "top", direction = "horizontal", 
+#                                title.position = "top", title.hjust = 0.5)) +
+#   theme(
+#     legend.margin = margin(0, 0, 0, 0), 
+#     legend.justification.top = "left",
+#     legend.location = "plot",
+#     plot.title.position = "plot"
+#   )                                        
+##### 
 p_cdd_s_ris <- predict_response(m_cdd_s_ris, 
                                 terms=c("con_dens_s[1:80, by = 1]", 
                                         "trt_F", "trt_I", 
-                                        "fragment.size[2, 100]"),
+                                        "fragment.size[5, 25, 125]"),
                              margin="marginalmeans")
 
 pr_cdd_s_ris <- residualize_over_grid(p_cdd_s_ris, m_cdd_s_ris) |> 
@@ -582,12 +554,120 @@ pl_cdd_s <- ggplot(filter(p_cdd_s_ris, trt !="FI"),
 
 ```
 
-Main take-aways
+### Plotting effects of  frament area
 
-* Survival is negatively affected by Conspecific density.
-* Insecticide increases survival, fungicide doesn't make an appreciable 
-difference.
+The effects are complex and not terribly clear. To interrogate them more, here
+are some plots
 
+```{r fragarea_plots}
+## Using the model split by area to 
+sdls |> group_by(frag_sizeclass3) |> summarize(mean(fragment.size))
+
+## plot the effect of density over fragment size
+
+
+
+test <- glmmTMB(Pr_s ~ slope.degrees_s + 
+          (scale(tot_dens) + scale(con_dens_s)) * 
+          (trt_F) *
+          scale(log(fragment.size)) +
+          (1|species) +
+          ## setting cor to 0 to converge 
+          (1|site/loc/gr/plot), 
+        weights = census.start, data = sdls, 
+        family=binomial)
+
+summary(test)
+summary(m_cdd_s_ris)
+summary(m_cdd_s_ri)
+
+int_data <- sdls |> 
+  mutate(con_dens_ss = scale(con_dens_s),
+         tot_dens_s = scale(tot_dens),
+         log_fragsize_s = scale(log(fragment.size)))
+
+int_mod <- glmmTMB(Pr_s ~ slope.degrees_s + 
+                     (tot_dens_s + con_dens_ss) *  
+                     (trt_I + trt_F) * log_fragsize_s +
+                     (con_dens_ss + tot_dens_s || species) +  
+                     (1 | site/loc/gr/plot), 
+                   weights = census.start, family = binomial, 
+                   data = int_data)
+
+preddat <- expand.grid(
+  trt_F = levels(int_data$trt_F),
+  con_dens_ss = 1,
+  log_fragsize_s = seq(-2, 1.3, length =20))
+
+xmat <- model.matrix(~ con_dens_ss + con_dens_ss:(trt_F + log_fragsize_s) +
+                       con_dens_ss:trt_F:log_fragsize_s,
+                     preddat)[ , -1]
+preddat$int_hat <- as.vector(xmat %*% fixef(int_mod)$cond[colnames(xmat)])
+vmat <- (vcov(int_mod)$cond[colnames(xmat), colnames(xmat)])
+preddat$int_se <-  sqrt(diag(xmat %*% vmat %*% t(xmat)))
+
+## Now insecticide
+preddat_i <- expand.grid(
+  trt_I = levels(int_data$trt_I),
+  con_dens_ss = 1,
+  log_fragsize_s = seq(-2, 1.3, length =20))
+
+xmat <- model.matrix(~ con_dens_ss + con_dens_ss:(trt_I + log_fragsize_s) +
+                       con_dens_ss:trt_I:log_fragsize_s,
+                     preddat_i)[ , -1]
+preddat_i$int_hat <- as.vector(xmat %*% fixef(int_mod)$cond[colnames(xmat)])
+vmat <- (vcov(int_mod)$cond[colnames(xmat), colnames(xmat)])
+preddat_i$int_se <-  sqrt(diag(xmat %*% vmat %*% t(xmat)))
+
+preddat <- bind_rows(preddat |> rename("trt" = "trt_F"), 
+                     filter(preddat_i, trt_I == "I") |> rename("trt" = "trt_I"))
+summary(preddat)
+
+preddat <- preddat |> mutate(.lower = int_hat - 1.96*int_se, 
+                             .upper = int_hat + 1.96*int_se, 
+                             log_frag_area = exp(log_fragsize_s*
+                               sd(log(sdls$fragment.size)) +
+                               mean(log(sdls$fragment.size))),
+                             trt =factor(trt, 
+                                         labels = c("Control", "Fungicide",
+                                                    "Insecticide")))
+
+ggplot(preddat, aes(x = log_frag_area, y = int_hat)) + facet_wrap( ~ trt) + 
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), alpha = 0.2, colour = NA) +
+  geom_line() + geom_hline(yintercept=0, linetype = "dotted") +
+#  coord_trans(x = "log" ) +
+  #scale_x_continuous(labels=exp) +
+  labs(x =  "Fragment area (ha)", 
+       y = "Effect of conspecific density on survival")
+
+## double checking results against interactions package (only works for 
+## lme4 and 2-way interactions
+test_mod_C <-  lme4::glmer(Pr_s ~ slope.degrees_s + trt_I +
+                       (tot_dens_s + con_dens_ss) * 
+                       log_fragsize_s +
+                        (1|species) +
+                        ## setting cor to 0 to converge 
+                        (1|site/loc/gr/plot), 
+                      weights = census.start,
+                      data =filter(sdls2, trt_F =="0") , 
+                      family=binomial)
+test_mod_F <-  lme4::glmer(Pr_s ~ slope.degrees_s + trt_I +
+                       (tot_dens_s + con_dens_ss) * 
+                       log_fragsize_s +
+                        (1|species) +
+                        ## setting cor to 0 to converge 
+                        (1|site/loc/gr/plot), 
+                      weights = census.start,
+                      data =filter(sdls2, trt_F =="F"), 
+                      family=binomial)
+interactions::johnson_neyman(test_mod_C, pred = con_dens_ss, 
+                             modx =   log_fragsize_s)
+interactions::johnson_neyman(test_mod_F, pred = con_dens_ss, 
+                              modx = log_fragsize_s)
+## basically the same result
+
+
+```
 
 ## Species specific inferences.
 
@@ -595,7 +675,7 @@ Initial analyses suggested that some species were heavily influencing the result
 The random slope should partly account for that.
 
 ```{r species_effects}
-sjPlot::plot_model(m_cdd_ris, type = "re", terms = "species", ri.nr = 1)
+sjPlot::plot_model(m_cdd_s_ris, type = "re", terms = "species", ri.nr = 1)
 ## very little variation among species in slopes
 sp_eff <- as.data.frame(ranef(m_cdd_ris, condVar = T)$cond$species)
 
@@ -654,7 +734,8 @@ summary(sp_mods[[2]]) ## still significant effects of conspecific density,
 ```{r species_influence}
 sp_common <- sdls |> group_by(species) |> summarise(n = sum(census.start)) |> 
    arrange(desc(n)) |> pull(species)
-sp_mods <- lapply(c("none", as.character(sp_common[1:5])), function(i) {
+names(sp_common) <- sp_common
+sp_mods <- map(c("none", as.character(sp_common[1:5])), function(i) {
   update(m_cdd_s_ris, data = filter(sdls, !species == i))})
 
 sjPlot::plot_models(sp_mods,
@@ -669,34 +750,24 @@ summary(sp_mods[[2]]) ## still significant effects of conspecific density,
 ```
 
 
-
-
 what about single species models?
 ```{r single_sp}
 ## base model
-m_cdd_1sp <- update(m_cdd_ri, ~.-(1|species))  ## remove species random effect
-summary(m_cdd_1sp) ## check
+m_cdd_s_1sp <- update(m_cdd_s_ris, ~.-(1|species) -
+                        (scale(con_dens_s) + scale(tot_dens) || species)  )
+## remove species random effect
+summary(m_cdd_s_1sp) ## check
+names(sp_common) <- sp_common
+single_sp_mods <- map(sp_common[1:5], function(i) {
+  update(m_cdd_s_1sp, data = filter(sdls, species == i))})
+single_sp_mods$all <- m_cdd_s_ris
+map(single_sp_mods, summary)
+a <- list("a"); b <- list("b"); c <- list("c")
 
-single_sp_mods <- lapply(sp_common[1:6], function(i) {
-  update(m_cdd_1sp, data = filter(sdls, species == i))})
-
+plot_models(single_sp_mods, m.labels=names(single_sp_mods)) 
+## Cinnamonam distorts scale, so dropping it
+plot_models(single_sp_mods[c(1:4, 6)], m.labels=names(single_sp_mods)[c(1:4, 6)]) 
 sr_dat <- filter(sdls, species == "SR") |> droplevels()
-
-m_sr <- glmmTMB(Pr_m ~ (scale(con_dens) + scale(tot_dens)) *
-                  (trt_F + trt_I) *  scale(fragment.size) +
-                  (1|site/loc/gr/plot), weights = census.start, 
-                family = binomial, data = sr_dat)
-
-m_srb <- glmmTMB(Pr_m ~ (scale(con_dens) ) *
-                  (trt_F + trt_I) *  scale(fragment.size) +
-                  (1|site/loc/gr/plot), weights = census.start, 
-                family = binomial, data = sr_dat)
-summary(m_sr)
-
-plot_models(single_sp_mods[1:5], std.est = "std", 
-            rm.terms = c("slope.degrees_s", 
-                         terms_cdd[str_detect(terms_cdd, "tot")]),
-            m.labels =  sp_common[1:5], grid = TRUE)
 
 ```
 

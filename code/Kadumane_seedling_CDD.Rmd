@@ -2,27 +2,25 @@
 title: "Density-dependence seedling mortality in Kadumane"
 author: "Robert Bagchi and Ashwin Viswanathan"
 date: "`r format(Sys.time(), '%d %B %Y')`"
+graphics: yes
 output: 
-  tufte::tufte_handout:
+  github_document:
+    toc: yes
+  pdf_document:
   number_sections: yes
-toc: true
-
+  toc: true
 ---
 ## set up
 
-```{r load_packages}
+```{r load_packages, message=FALSE}
 library(tidyverse)
 library(ggthemes)
 library(knitr)
-
-#library(vegan)
-#library(grid)
-#library(geosphere)
-#library(mgcv)
 library(glmmTMB)
 library(DHARMa)
 library(broom.mixed)
 library(ggeffects)
+library(ggdist)
 library(sjPlot)
 library(patchwork)
 ```
@@ -52,7 +50,7 @@ plot_dat <- read_rds("data/kadumane_plot_metadata.rds")
 * Vary in density among plots.
 * Are groups of many (unidentified) species with the same code.
 
-```{r select_species}
+```{r select_species, cache = TRUE}
 sdls <-  sdls |> left_join(site_dat) |> left_join(plot_dat) |> 
   filter(census.start > 0)
 
@@ -76,7 +74,7 @@ dim(sdls) ## 968 columns
 
 Rename columns, add total seedling density, scale and centre data.
 
-```{r data_wrangling}
+```{r data_wrangling, cache = TRUE}
 ## shorten names
 sdls <- rename(sdls, 
                "trt_F" = "treatment.fungicide", 
@@ -118,15 +116,15 @@ sdls |> summarise(n_sdls = sum(census.start),
 
 # Models
 
-## Raw conspecific density model
+<!-- ## Raw conspecific density model -->
 
-Fitting a model of mortality as a function of initial conspecific density, 
-initial total density, biocide treatment and fragment area (and their
-interactions).
+<!-- Fitting a model of mortality as a function of initial conspecific density,  -->
+<!-- initial total density, biocide treatment and fragment area (and their -->
+<!-- interactions). -->
 
-Also including slope of plot and random intercepts for plot, nested in location,
-nested in site. Random slopes and intercepts are included for each species to
-examine how density dependence varies among species.
+<!-- Also including slope of plot and random intercepts for plot, nested in location, -->
+<!-- nested in site. Random slopes and intercepts are included for each species to -->
+<!-- examine how density dependence varies among species. -->
 
 ```{r fit_model, eval = FALSE, include = FALSE}
 # species random intercept and slope
@@ -152,10 +150,10 @@ AIC(m_cdd_ris, m_cdd_ri)
 ## random-intercept only version a bit better.
 ```
 
-Note that including the insecticide x fungicide interaction causes convergence
-problems and doesn't seem to be important either. Removing for practicality.
+<!-- Note that including the insecticide x fungicide interaction causes convergence -->
+<!-- problems and doesn't seem to be important either. Removing for practicality. -->
 
-###  Model diagnostics
+<!-- ###  Model diagnostics -->
 
 ```{r diagnostics, eval = FALSE, include = FALSE}
 ## no evidence of variation among species
@@ -187,23 +185,23 @@ ggplot(diag_dat, aes(x = con_dens, y = res)) +
 
 ```
 
-### Take-homes
+<!-- ### Take-homes -->
 
-* Model diagnostics are generally good.
-* Diagnostics are slightly better for non-logged version. Logged version has
-some evidence of quantiles deviating from expectations (removed logged
-version now). 
-* No evidence of trends between covariates and residuals. 
+<!-- * Model diagnostics are generally good. -->
+<!-- * Diagnostics are slightly better for non-logged version. Logged version has -->
+<!-- some evidence of quantiles deviating from expectations (removed logged -->
+<!-- version now).  -->
+<!-- * No evidence of trends between covariates and residuals.  -->
 
-The log density model has a slightly lower AIC. A little poking around 
-(not shown) suggests that excluding the largest values reverses this order, 
-so that the non-logged version is better. 
+<!-- The log density model has a slightly lower AIC. A little poking around  -->
+<!-- (not shown) suggests that excluding the largest values reverses this order,  -->
+<!-- so that the non-logged version is better.  -->
 
-Looks like the two models lead to roughly similar interpretation.
+<!-- Looks like the two models lead to roughly similar interpretation. -->
 
-### Inference
+<!-- ### Inference -->
 
-The fixed effects
+<!-- The fixed effects -->
 
 ```{r inference, eval = FALSE, include = FALSE}
 ## Non-logged version
@@ -273,13 +271,13 @@ pl_cdd <- ggplot(filter(p_cdd_ri, trt !="FI"),
 pl_cdd | tp_cdd_ri
 ```
 
-Main conclusions
-* Suppressing insects and fungi) increases survival. 
-* Conspecific density reduces seedling survival.
-* The protection by fungicide is less effective at high conspecific density
-* There is a weak 3-way interaction between conspecific density, fragment size, 
-and fungicide addition, so that the reduction in protection at high densities
-is more evident in larger fragments.
+<!-- Main conclusions -->
+<!-- * Suppressing insects and fungi) increases survival.  -->
+<!-- * Conspecific density reduces seedling survival. -->
+<!-- * The protection by fungicide is less effective at high conspecific density -->
+<!-- * There is a weak 3-way interaction between conspecific density, fragment size,  -->
+<!-- and fungicide addition, so that the reduction in protection at high densities -->
+<!-- is more evident in larger fragments. -->
 
 
 ## Scaled conspecific density models
@@ -301,7 +299,7 @@ ggplot(sp_mean_dens, aes(x = log(sp_mean_dens), y = sp_mean_surv)) +
 To account for this, we can scale conspecific density by dividing by mean
 density and refitting the models.
 
-```{r fit_scaled_models}
+```{r fit_scaled_models, cache = TRUE}
 ## models using species-scaled density
 ## 
 ## Random intercept model
@@ -333,7 +331,7 @@ individual species.
 
 ### Diagnostics
 
-```{r diag_scaled}
+```{r diag_scaled, cache = TRUE}
 res_s <- simulateResiduals(m_cdd_s_ri)
 plot(res_s) ## ok - some deviation from ideal residual distribution, but 
 ## acceptable.
@@ -366,7 +364,7 @@ does seem to be sensible given the massive differences in density.
 
 ### Model inference
 
-```{r inference_scaled}
+```{r inference_scaled, cache = TRUE}
 summary(m_cdd_s_ri)
 plot_model(m_cdd_s_ri, show.values=TRUE) + ylim(c(0.5, 2.5))
 car::Anova(m_cdd_s_ri)
@@ -408,7 +406,7 @@ increases with fragment area.
 
 The effect of fragment
 
-```{r mod_by_fragsize}
+```{r mod_by_fragsize, cache = TRUE}
 # Using 3 categories
 sdls <- mutate(sdls, 
                frag_sizeclass3 = cut(fragment.size, 
@@ -463,7 +461,7 @@ its magnitude.
 
 ### Graphics
 
-```{r plots_scaled}
+```{r plots_scaled, cache = TRUE}
 labs <-  c("ConDens", "I", "F", "log(FragArea)",
               "ConDens:I", "ConDens:F", "log(FragArea):\n ConDens",
               "log(FragArea):I"  , "log(FragArea):F", 
@@ -545,9 +543,54 @@ pl_cdd_s <- ggplot(filter(p_cdd_s_ri, trt !="FI"),
 The effects are complex and not terribly clear. To interrogate them more, here
 are some plots
 
-```{r fragarea_plots}
-## Using the model split by area to 
-sdls |> group_by(frag_sizeclass3) |> summarize(mean(fragment.size))
+```{r fragarea_plots, cache = TRUE}
+## Using the model split by area to get points
+sdls <- mutate(sdls, 
+               frag_sizeclass5 = cut(fragment.size, 
+                                     quantile(site_dat$fragment.size, 
+                                              seq(0, 1, 0.2)), 
+                                        include.lowest=TRUE))
+
+m_cdd_s_ri_frag <- lapply(split(sdls, f= sdls$frag_sizeclass5), 
+                           function(d){
+                             glmmTMB(Pr_s ~ slope.degrees_s + 
+                                       (scale(tot_dens) + scale(con_dens_s)) * 
+                                       (trt_I + trt_F) +
+                                       (1|species) +
+                                       ## setting cor to 0 to converge 
+                                       (1|site/loc/gr/plot), 
+                                     weights = census.start, data = d, 
+                                     family=binomial)})
+term_nms <- names(fixef(m_cdd_s_ri_frag[[1]])$cond) 
+
+plot_models(m_cdd_s_ri_frag, 
+            rm.terms=c("slope.degrees_s", 
+            term_nms[str_detect(term_nms, "tot")]), ## declutter
+            m.labels=names(m_cdd_s_ri_frag), p.shape=TRUE) +
+  labs(colour = "Fragment Area")
+
+
+cat_int <- map_df(m_cdd_s_ri_frag, .id = "area_range", .f =\(m) {
+    pars <- c("scale(con_dens_s)", 
+                "scale(con_dens_s):trt_II",  
+                "scale(con_dens_s):trt_FF")
+  xmat <- rbind(c(1, 0, 0), c(1, 1, 0), c(1, 0, 1))
+  res <- data.frame(trt = pars, 
+                    int_hat = xmat %*% fixef(m)$cond[pars])
+  vcv <- vcov(m)$cond[pars, pars]
+  z <- sqrt(diag(xmat %*% vcv %*% t(xmat)))*1 ## se, not 95% CI
+  res <- mutate(res, .upper = int_hat + z, .lower = int_hat - z)
+  return(res)
+  }) |> 
+  mutate(area_range = str_remove_all(area_range, "[\\[\\]\\(]")) |> 
+  separate_wider_delim(area_range, ",", names=c("lb", "ub")) |> 
+  mutate(frag_area = 0.5*(as.numeric(lb) + as.numeric(ub)),
+         trt = case_when(
+           trt =="scale(con_dens_s)" ~ "Control",
+           trt =="scale(con_dens_s):trt_FF" ~ "Fungicide",
+           trt =="scale(con_dens_s):trt_II" ~ "Insecticide"))
+
+sdls |> group_by(frag_sizeclass5) |> summarize(mean(fragment.size))
 
 ## plot the effect of density over fragment size
 int_data <- sdls |> 
@@ -600,28 +643,31 @@ preddat <- preddat |> mutate(.lower = int_hat - 1.96*int_se,
                                          labels = c("Control", "Fungicide",
                                                     "Insecticide")))
 int_plot <- ggplot(preddat, aes(x = frag_area)) + facet_wrap( ~ trt) + 
-  geom_ribbon(aes(y = int_hat, ymin = .lower, ymax = .upper), alpha = 0.2, colour = NA) +
+  geom_ribbon(aes(y = int_hat, ymin = .lower, ymax = .upper),
+              alpha = 0.2, colour = NA) +
   geom_line(aes(y = int_hat)) + geom_hline(yintercept=0, linetype = "dotted") +
-  #coord_trans(x = "log") +
   scale_x_continuous(trans = "log", breaks=c(2, 8, 32, 128)) +
   labs(x =  "Fragment area (ha)", 
        y = "Effect of conspecific density on survival")
 
+int_plot <- int_plot + 
+  ggdist::geom_pointinterval(data = cat_int, aes(y = int_hat, 
+                                         ymin = .lower, ymax = .upper))
 
 sdls <- mutate(sdls, trt = case_when(
   trt_F == "F" ~ "F",
   trt_I == "I" ~ "I",
   .default = "C"), 
   trt = factor(trt, labels = c("Control", "Fungicide", "Insecticide")))
-library(ggdist)
 
-int_plot <- int_plot + ggdist::geom_dots(data = sdls, aes(x = fragment.size), y =  -1,
-                             smooth = smooth_unbounded(), layout = "swarm", 
-                             side = "bottom", binwidth = 0.04,# alpha = 0.7, 
-                             overflow = "compress")+  ylim(c(-1, 0.5))
+int_plot + 
+  ggdist::geom_dots(data = sdls, aes(x = fragment.size), y =  -1.6,
+                    smooth = ggdist::smooth_unbounded(), layout = "swarm", 
+                    side = "bottom", binwidth = 0.04,# alpha = 0.7, 
+                    overflow = "compress") #+  ylim(c(-1, 0.5))
 
-int_plot + ggdensity::geom_hdr_rug(data = sdls, aes(x = fragment.size))  +
-  theme(legend.position="none")
+ int_plot + ggdensity::geom_hdr_rug(data = sdls, aes(x = fragment.size))  +
+   theme(legend.position="none")
 
 
 ## double checking results against interactions package (only works for 
@@ -772,6 +818,7 @@ To  be honest, probably not enough data for individual species.  Dropping
 the 3-way interactions helps fit the models, but only notable effects are 
 density dependence in Ventilago and effects of fragment size on symplocus. 
 
+# Session Information
 
 ```{r sessioninfo}
 sessionInfo()

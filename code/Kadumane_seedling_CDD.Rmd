@@ -6,6 +6,7 @@ output:
   tufte::tufte_handout:
   number_sections: yes
 toc: true
+
 ---
 ## set up
 
@@ -35,10 +36,11 @@ theme_set(theme_tufte())
 Load data
 
 ```{r load_data}
-sdls <- read_rds("data/kadumane_seedlings.rds")
+sp_codes <- read_csv("data/sp_codes.csv")
 site_dat <- read_rds("data/kadumane_site_metadata.rds")
+sdls <- read_rds("data/kadumane_seedlings.rds")
 plot_dat <- read_rds("data/kadumane_plot_metadata.rds")
-sp_codes <- read_csv("data/species_names.csv")
+
 ```
 
 1. Join in site and plot meta-data.
@@ -333,7 +335,8 @@ individual species.
 
 ```{r diag_scaled}
 res_s <- simulateResiduals(m_cdd_s_ri)
-plot(res_s) ## ok - some deviation from ideal residual distribution
+plot(res_s) ## ok - some deviation from ideal residual distribution, but 
+## acceptable.
 
 ## look at relationship with covariates
 diag_dat <- data.frame(m_cdd_s_ri$frame, res = res_s$fittedResiduals)
@@ -365,16 +368,31 @@ does seem to be sensible given the massive differences in density.
 
 ```{r inference_scaled}
 summary(m_cdd_s_ri)
-plot_model(m_cdd_s_ri, show.values=TRUE )
-
+plot_model(m_cdd_s_ri, show.values=TRUE) + ylim(c(0.5, 2.5))
+car::Anova(m_cdd_s_ri)
+car::Anova(m_cdd_s_ris)
+## Given lack of evidence for 3-way interactions, perhaps try only 2 way?
+m_cdd_s_ri_2way <- glmmTMB(Pr_s ~ slope.degrees_s + 
+                       ((scale(tot_dens) + scale(con_dens_s)) + 
+                       (trt_I + trt_F) +
+                       scale(log(fragment.size)))^2 +
+                       (1|species) +
+                       (1|site/loc/gr/plot), 
+                     weights = census.start, data = sdls, 
+                     family=binomial)
+plot_model(m_cdd_s_ri_2way) + ylim(c(0.4, 2.5))
 ```
 
 ### Take-homes:
 
 * Survival is negatively conspecific density dependent
-* Fungicide reduces the density dependence (P = 0.03). Note that the magnitude
+* Fungicide reduces the density dependence, but the evidence is complex. In
+the full model with a 3 way CDD:frag_area:F interaction, the  2-way cdd:F 
+interaction is significant (P = 0.03). Note that the magnitude
 of the effect (0.21) is 2/3rds of the overall conspecific density effect
-(-0.32). Worth remarking on in the results.
+(-0.32). Worth remarking on in the results. However, the Type 2 anova suggests
+that the effect is conditional on the effect of fragment area - excluding the 
+interaction weakens evidence for the 2-way interaction (P = 0.059) 
 * CDD strengthens significantly with fragment area (P = 0.017).
 * The interaction between fungicide, fragment area and CDD is not significant,
 but its estimated magnitude (0.117) is almost equal (and opposite direction) to
@@ -410,10 +428,11 @@ m_cdd_s_ri_frag <- lapply(split(sdls, f= sdls$frag_sizeclass3),
                                      family=binomial)})
 term_nms <- names(fixef(m_cdd_s_ri_frag[[1]])$cond) 
 
-plot_models(m_cdd_s_ri_frag, show.values=TRUE,
+plot_models(m_cdd_s_ri_frag, 
             rm.terms=c("slope.degrees_s", 
             term_nms[str_detect(term_nms, "tot")]), ## declutter
-            m.labels=names(m_cdd_s_ri_frag))
+            m.labels=names(m_cdd_s_ri_frag), p.shape=TRUE) +
+  labs(colour = "Fragment Area")
 map(m_cdd_s_ri_frag, summary)
 
 ## What about a single model with categorical fragment sizes
@@ -445,24 +464,13 @@ its magnitude.
 ### Graphics
 
 ```{r plots_scaled}
-#####
-# terms_cdd <- names(fixef(m_cdd_s_ris)$cond)
-# #sjPlot::plot_model(m_cdd) ## bit busy
-# trt_cols <- terms_cdd[-c(1:2)]
-# trt_cols <- trt_cols[!str_detect(trt_cols, "tot")] 
-# trt_cols <- case_when(
-#   str_detect(trt_cols, "trt_II") ~  "Insecticide",
-#   str_detect(trt_cols, "trt_FF") ~ "Fungicide",
-#   .default =  "Control")
-
-#####
 labs <-  c("ConDens", "I", "F", "log(FragArea)",
               "ConDens:I", "ConDens:F", "log(FragArea):\n ConDens",
               "log(FragArea):I"  , "log(FragArea):F", 
               "log(FragArea):\n (ConDens:I)", 
               "log(FragArea):\n (ConDens:F)")
-tp_cdd_s_ris <- 
-  tidy(m_cdd_s_ris, conf.int = TRUE) |> 
+tp_cdd_s_ri <- 
+  tidy(m_cdd_s_ri, conf.int = TRUE) |> 
   filter(effect == "fixed", 
          !str_detect(term, "tot_dens"), 
          !term %in% c("(Intercept)", "slope.degrees_s")) |> 
@@ -485,37 +493,15 @@ tp_cdd_s_ris <-
     legend.location = "plot",
     plot.title.position = "plot"
   )                                        
-tp_cdd_s_ris
-#####
-# tp_cdd_s_ris <- 
-#     sjPlot::plot_model(m_cdd_s_ris, 
-#                        rm.terms = c("slope.degrees_s", 
-#                                     terms_cdd[str_detect(terms_cdd, "tot")]),
-#                        group.terms= trt_cols)
-# tp_cdd_s_ris <- tp_cdd_s_ris$data   |> 
-#   mutate(term = factor(labs, levels = rev(labs))) |> 
-#   ggplot(aes(y = term, x = estimate, xmin = conf.low, xmax = conf.high, 
-#              colour = group)) + 
-#   geom_pointrange() +
-#   geom_vline(xintercept=1, linetype = "dotted") +
-#   scale_colour_brewer(palette="Set2", name="Treatment") +
-#   labs(y = NULL, x = "Odds ratio")  + 
-#   guides(colour = guide_legend(position = "top", direction = "horizontal", 
-#                                title.position = "top", title.hjust = 0.5)) +
-#   theme(
-#     legend.margin = margin(0, 0, 0, 0), 
-#     legend.justification.top = "left",
-#     legend.location = "plot",
-#     plot.title.position = "plot"
-#   )                                        
-##### 
-p_cdd_s_ris <- predict_response(m_cdd_s_ris, 
+tp_cdd_s_ri
+
+p_cdd_s_ri <- predict_response(m_cdd_s_ri, 
                                 terms=c("con_dens_s[1:80, by = 1]", 
                                         "trt_F", "trt_I", 
                                         "fragment.size[5, 25, 125]"),
                              margin="marginalmeans")
 
-pr_cdd_s_ris <- residualize_over_grid(p_cdd_s_ris, m_cdd_s_ris) |> 
+pr_cdd_s_ri <- residualize_over_grid(p_cdd_s_ri, m_cdd_s_ri) |> 
    bind_cols(species = sdls$species) |> 
   mutate(trt = case_when(
     group == "0" & facet == "0" ~ "Control",
@@ -527,7 +513,7 @@ pr_cdd_s_ris <- residualize_over_grid(p_cdd_s_ris, m_cdd_s_ris) |>
   group_by(con_dens, trt, frag_area, facet_lab, species) |> 
   summarise(predicted = mean(predicted), n = n())
 
-p_cdd_s_ris <- as.data.frame(p_cdd_s_ris) |> 
+p_cdd_s_ri <- as.data.frame(p_cdd_s_ri) |> 
   mutate(trt = case_when(
     group == "0" & facet == "0" ~ "Control",
     group == "F" & facet == "0" ~ "Fungicide",
@@ -536,25 +522,25 @@ p_cdd_s_ris <- as.data.frame(p_cdd_s_ris) |>
     facet_lab = "Fragment Area (ha)") |> 
   rename("con_dens" = "x", "frag_area" = "panel")
 
-pl_cdd_s <- ggplot(filter(p_cdd_s_ris, trt !="FI"), 
+pl_cdd_s <- ggplot(filter(p_cdd_s_ri, trt !="FI"), 
        aes(x=con_dens, y = predicted, colour = trt)) +
   ggh4x::facet_nested(~facet_lab + frag_area) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = trt), 
               colour = NA, alpha = 0.3) + 
   geom_line() +
-  geom_point(data = filter(pr_cdd_s_ris, trt != "FI")) +
+  geom_point(data = filter(pr_cdd_s_ri, trt != "FI")) +
   scale_colour_brewer(palette="Set2") + 
   scale_fill_brewer(palette="Set2", guide = "none") +
   labs(x = expression(Conspecific~density~(m^-2)), y = "Pr(Survival)", 
        colour = "Treatment") + theme(legend.position="none")
 
 
-(pl_cdd_s  | tp_cdd_s_ris )  + 
+(pl_cdd_s  | tp_cdd_s_ri )  + 
   plot_layout(widths=c(0.6, 0.4))
 
 ```
 
-### Plotting effects of  frament area
+### Plotting effects of  fragment area
 
 The effects are complex and not terribly clear. To interrogate them more, here
 are some plots
@@ -564,23 +550,6 @@ are some plots
 sdls |> group_by(frag_sizeclass3) |> summarize(mean(fragment.size))
 
 ## plot the effect of density over fragment size
-
-
-
-test <- glmmTMB(Pr_s ~ slope.degrees_s + 
-          (scale(tot_dens) + scale(con_dens_s)) * 
-          (trt_F) *
-          scale(log(fragment.size)) +
-          (1|species) +
-          ## setting cor to 0 to converge 
-          (1|site/loc/gr/plot), 
-        weights = census.start, data = sdls, 
-        family=binomial)
-
-summary(test)
-summary(m_cdd_s_ris)
-summary(m_cdd_s_ri)
-
 int_data <- sdls |> 
   mutate(con_dens_ss = scale(con_dens_s),
          tot_dens_s = scale(tot_dens),
@@ -589,7 +558,7 @@ int_data <- sdls |>
 int_mod <- glmmTMB(Pr_s ~ slope.degrees_s + 
                      (tot_dens_s + con_dens_ss) *  
                      (trt_I + trt_F) * log_fragsize_s +
-                     (con_dens_ss + tot_dens_s || species) +  
+                     (1| species) +  
                      (1 | site/loc/gr/plot), 
                    weights = census.start, family = binomial, 
                    data = int_data)
@@ -621,24 +590,39 @@ preddat_i$int_se <-  sqrt(diag(xmat %*% vmat %*% t(xmat)))
 
 preddat <- bind_rows(preddat |> rename("trt" = "trt_F"), 
                      filter(preddat_i, trt_I == "I") |> rename("trt" = "trt_I"))
-summary(preddat)
 
 preddat <- preddat |> mutate(.lower = int_hat - 1.96*int_se, 
                              .upper = int_hat + 1.96*int_se, 
-                             log_frag_area = exp(log_fragsize_s*
+                             frag_area = exp(log_fragsize_s*
                                sd(log(sdls$fragment.size)) +
                                mean(log(sdls$fragment.size))),
                              trt =factor(trt, 
                                          labels = c("Control", "Fungicide",
                                                     "Insecticide")))
-
-ggplot(preddat, aes(x = log_frag_area, y = int_hat)) + facet_wrap( ~ trt) + 
-  geom_ribbon(aes(ymin = .lower, ymax = .upper), alpha = 0.2, colour = NA) +
-  geom_line() + geom_hline(yintercept=0, linetype = "dotted") +
-#  coord_trans(x = "log" ) +
-  #scale_x_continuous(labels=exp) +
+int_plot <- ggplot(preddat, aes(x = frag_area)) + facet_wrap( ~ trt) + 
+  geom_ribbon(aes(y = int_hat, ymin = .lower, ymax = .upper), alpha = 0.2, colour = NA) +
+  geom_line(aes(y = int_hat)) + geom_hline(yintercept=0, linetype = "dotted") +
+  #coord_trans(x = "log") +
+  scale_x_continuous(trans = "log", breaks=c(2, 8, 32, 128)) +
   labs(x =  "Fragment area (ha)", 
        y = "Effect of conspecific density on survival")
+
+
+sdls <- mutate(sdls, trt = case_when(
+  trt_F == "F" ~ "F",
+  trt_I == "I" ~ "I",
+  .default = "C"), 
+  trt = factor(trt, labels = c("Control", "Fungicide", "Insecticide")))
+library(ggdist)
+
+int_plot <- int_plot + ggdist::geom_dots(data = sdls, aes(x = fragment.size), y =  -1,
+                             smooth = smooth_unbounded(), layout = "swarm", 
+                             side = "bottom", binwidth = 0.04,# alpha = 0.7, 
+                             overflow = "compress")+  ylim(c(-1, 0.5))
+
+int_plot + ggdensity::geom_hdr_rug(data = sdls, aes(x = fragment.size))  +
+  theme(legend.position="none")
+
 
 ## double checking results against interactions package (only works for 
 ## lme4 and 2-way interactions
@@ -649,8 +633,9 @@ test_mod_C <-  lme4::glmer(Pr_s ~ slope.degrees_s + trt_I +
                         ## setting cor to 0 to converge 
                         (1|site/loc/gr/plot), 
                       weights = census.start,
-                      data =filter(sdls2, trt_F =="0") , 
+                      data =filter(int_data, trt_F =="0") , 
                       family=binomial)
+
 test_mod_F <-  lme4::glmer(Pr_s ~ slope.degrees_s + trt_I +
                        (tot_dens_s + con_dens_ss) * 
                        log_fragsize_s +
@@ -658,13 +643,19 @@ test_mod_F <-  lme4::glmer(Pr_s ~ slope.degrees_s + trt_I +
                         ## setting cor to 0 to converge 
                         (1|site/loc/gr/plot), 
                       weights = census.start,
-                      data =filter(sdls2, trt_F =="F"), 
+                      data =filter(int_data, trt_F =="F"), 
                       family=binomial)
 interactions::johnson_neyman(test_mod_C, pred = con_dens_ss, 
                              modx =   log_fragsize_s)
+exp(-1.73*sd(log(int_data$fragment.size)) + mean(log(int_data$fragment.size)))
 interactions::johnson_neyman(test_mod_F, pred = con_dens_ss, 
                               modx = log_fragsize_s)
 ## basically the same result
+int_plot + ggdist::geom_dots(data = sdls, aes(x = fragment.size), y =  -1,
+                             smooth = smooth_unbounded(), layout = "swarm", 
+                             side = "bottom", binwidth = 0.04,# alpha = 0.7, 
+                             overflow = "compress")+  ylim(c(-1, 0.5)) +
+  geom_vline(xintercept=2.05)
 
 
 ```
@@ -676,35 +667,35 @@ The random slope should partly account for that.
 
 ```{r species_effects}
 sjPlot::plot_model(m_cdd_s_ris, type = "re", terms = "species", ri.nr = 1)
-## very little variation among species in slopes
-sp_eff <- as.data.frame(ranef(m_cdd_ris, condVar = T)$cond$species)
+## very little variation among species in slopes, but perhaps obscured 
+## by large variation in the intercept
+sp_eff <- as.data.frame(ranef(m_cdd_s_ris, condVar = T)$cond$species)
 
 sp_eff <- bind_cols(sp_eff, 
-                    t(apply(attr(sp_eff, "condVar"), 3, function(x) sqrt(diag(x)))))
+                    t(apply(attr(sp_eff, "condVar"), 3, function(x)
+                      sqrt(diag(x)))))
+names(fixef(m_cdd_s_ris)$cond)
+
 names(sp_eff) <- c("Intercept", "con_dens", "tot_dens", 
                    "Intercept_se", "con_dens_se", "tot_dens_se")
-sp_eff <- mutate(sp_eff, sp_names = row.names(sp_eff))
+sp_eff <- mutate(sp_eff, sp_names = row.names(sp_eff),
+                 Intercept = Intercept + fixef(m_cdd_s_ris)$cond[1],
+                 con_dens = con_dens + fixef(m_cdd_s_ris)$cond["scale(con_dens_s)"],
+                 tot_dens = tot_dens + fixef(m_cdd_s_ris)$cond["scale(tot_dens)"])
 
 sp_eff |> arrange(con_dens) |> 
-  ggplot(aes(y = sp_names, x = con_dens, 
+  ggplot(aes(y = reorder(sp_names, con_dens), x = con_dens, 
              xmin = con_dens - 2*con_dens_se, 
              xmax = con_dens + 2*con_dens_se)) +
     geom_vline(xintercept=0, linetype = "dotted") +
   geom_pointrange() 
-## nothing going on. Basically all 0. 
 
-sp_eff |> arrange(Intercept) |> 
-  mutate(sp_names = factor(1:nrow(sp_eff), labels = sp_names)) |> 
-  ggplot(aes(y = sp_names, x = Intercept, 
-             xmin = Intercept - 2*Intercept_se, 
-             xmax = Intercept + 2*Intercept_se)) +
-  geom_vline(xintercept=0, linetype = "dotted") +
-  geom_pointrange()  
+## TBH not very illuminating.
 
 ```
 
 
-Almost no variation in cdd among species. 
+Little variation in cdd among species. 
 
 
 Perhaps remove most abundant species to check if patterns are robust.
@@ -712,1587 +703,76 @@ Perhaps remove most abundant species to check if patterns are robust.
 ```{r species_influence}
 sp_common <- sdls |> group_by(species) |> summarise(n = sum(census.start)) |> 
    arrange(desc(n)) |> pull(species)
-sp_mods <- lapply(c("none", as.character(sp_common[1:4])), function(i) {
-  update(m_cdd_ri, data = filter(sdls, !species == i))})
 
-
-library(sjPlot)
+sp_mods <- lapply(c("none", as.character(sp_common[1:5])), function(i) {
+  update(m_cdd_s_ri, data = filter(sdls, !species == i))})
+sp_codes <- mutate(sp_codes, spbin = paste(genus, species))
+term_nms <- names(fixef(m_cdd_s_ri_frag[[1]])$cond)
 
 plot_models(sp_mods,
             rm.terms = c("slope.degrees_s", 
-                         terms_cdd[str_detect(terms_cdd, "tot")]),
-            m.labels = c("None", as.character(sp_common[1:4])))
+                         term_nms[str_detect(term_nms, "tot")]),
+            m.labels = c("None", 
+                         sp_codes$spbin[match(sp_common[1:5], sp_codes$code)]),
+            p.shape=TRUE) + labs(colour = "Species excluded") 
 
-## Only species that makes a difference is S. rubicundum. 
-summary(sp_mods[[2]]) ## still significant effects of conspecific density,
-# and insecticide and fungicide, and interaction between density and fungicide.
-
-```
-
-### scaled versions
-
-```{r species_influence}
-sp_common <- sdls |> group_by(species) |> summarise(n = sum(census.start)) |> 
-   arrange(desc(n)) |> pull(species)
-names(sp_common) <- sp_common
-sp_mods <- map(c("none", as.character(sp_common[1:5])), function(i) {
-  update(m_cdd_s_ris, data = filter(sdls, !species == i))})
-
-sjPlot::plot_models(sp_mods,
-            rm.terms = c("slope.degrees_s", 
-                         terms_cdd[str_detect(terms_cdd, "tot")]),
-            m.labels = c("None", as.character(sp_common[1:5])))
-
-## No species seems to make a bit difference
-summary(sp_mods[[2]]) ## still significant effects of conspecific density,
-# and insecticide and fungicide, and interaction between density and fungicide.
-
+## Only species that makes a difference is S. rubicundum - removing it dampens
+## interaction between density and fungicide. Symplocus affects insects a bit.
 ```
 
 
 what about single species models?
 ```{r single_sp}
 ## base model
-m_cdd_s_1sp <- update(m_cdd_s_ris, ~.-(1|species) -
-                        (scale(con_dens_s) + scale(tot_dens) || species)  )
 ## remove species random effect
-summary(m_cdd_s_1sp) ## check
 names(sp_common) <- sp_common
 single_sp_mods <- map(sp_common[1:5], function(i) {
-  update(m_cdd_s_1sp, data = filter(sdls, species == i))})
-single_sp_mods$all <- m_cdd_s_ris
-map(single_sp_mods, summary)
-a <- list("a"); b <- list("b"); c <- list("c")
+  update(m_cdd_s_ri, data = filter(sdls, species == i))})
+names(single_sp_mods) <- sp_codes$spbin[match(names(single_sp_mods), sp_codes$code)]
+single_sp_mods$All <- m_cdd_s_ris
 
-plot_models(single_sp_mods, m.labels=names(single_sp_mods)) 
+map(single_sp_mods, summary)
+
+
+plot_models(single_sp_mods, m.labels=names(single_sp_mods), p.shape=TRUE) 
 ## Cinnamonam distorts scale, so dropping it
-plot_models(single_sp_mods[c(1:4, 6)], m.labels=names(single_sp_mods)[c(1:4, 6)]) 
-sr_dat <- filter(sdls, species == "SR") |> droplevels()
+plot_models(single_sp_mods[c(1:4, 6)], 
+            rm.terms = c("slope.degrees_s", 
+                         term_nms[str_detect(term_nms, "tot")]),
+            m.labels=names(single_sp_mods)[c(1:4, 6)], 
+            p.shape = TRUE, grid=TRUE) 
+
+## perhaps too much complexity. Dropping 3-way interactions
+## 
+
+m_cdd_s_ri_2way <- glmmTMB(Pr_s ~ slope.degrees_s + 
+                       (scale(tot_dens) + scale(con_dens_s)) *
+                       (trt_I + trt_F) +
+                       scale(log(fragment.size)) *
+                         (scale(tot_dens) + scale(con_dens_s) + trt_I + trt_F) +
+                       (1|site/loc/gr/plot), 
+                     weights = census.start, data = sdls, 
+                     family=binomial)
+
+single_sp_mods <- map(sp_common[1:4], function(i) {
+  update(m_cdd_s_ri_2way, data = filter(sdls, species == i))})
+names(single_sp_mods) <- sp_codes$spbin[match(names(single_sp_mods), sp_codes$code)]
+single_sp_mods$All <- m_cdd_s_ri_2way
+
+
+plot_models(single_sp_mods, 
+            rm.terms = c("slope.degrees_s", 
+                         term_nms[str_detect(term_nms, "tot")]),
+            m.labels=names(single_sp_mods), 
+            p.shape = TRUE, grid=FALSE)  + labs(colour = "Species")
 
 ```
 
-```{r oldcode, eval = FALSE, include = FALSE}
+To  be honest, probably not enough data for individual species.  Dropping 
+the 3-way interactions helps fit the models, but only notable effects are 
+density dependence in Ventilago and effects of fragment size on symplocus. 
 
 
-
-temp$statusm = scale(temp$census.start, center = F)
-temp$sizem = scale(temp$fragment.size, center = F)
-
-temp$logdensm = scale(temp$logdens)
-temp[is.na(temp$slope.degrees),]$slope.degrees = 5 
-temp$slope.degrees = temp$slope.degrees/100
-temp$slope.degrees = scale(temp$slope.degrees, center = F)
-
-
-temp = temp[temp$census.start != 49,]
-temp = temp[temp$species != "Symp" | temp$plot != "5" | temp$census.start != 15,]
-
-
-temp$plotx = temp$plot
-temp[temp$plotx == "2",]$plotx = "1"
-
-mat = rbind(c(-0.5,0.5))
-#library(MASS)
-cMat = MASS::ginv(mat)
-
-temp1 = temp
-
-fit9a = glmer (proportion.mortality ~ treatment.fungicide * 
-                 treatment.insecticide*statusm + 
-                 treatment.fungicide*treatment.insecticide*sizem +
-                 slope.degrees + (1|species) + (0 + statusm|species) +
-                 (1|location.code/group/plot), 
-               weights = census.start, data = temp1, 
-               contrasts = list(treatment.fungicide = cMat,
-                                treatment.insecticide = cMat), 
-               family="binomial", nAGQ = 1)
-
-sum(resid(fit9a, type = "pearson")^2)
-df.residual(fit9a)
-library(glmmTMB)
-fit <- glmmTMB (proportion.mortality ~ treatment.fungicide * 
-                 treatment.insecticide*statusm + 
-                 treatment.fungicide*treatment.insecticide*sizem +
-                 slope.degrees + (1|species) + (0 + statusm|species) +
-                 (1|location.code/group/plot), 
-               weights = census.start, data = temp1, 
-               contrasts = list(treatment.fungicide = cMat,
-                                treatment.insecticide = cMat), 
-               family=binomial)
-summary(fit)
-plot(ranef(fit)$cond$species$statusm)
-
-# SR
-
-temp = seedling_census_data[seedling_census_data$census.start >= 1 & seedling_census_data$species == "SR" & seedling_census_data$census.start <= 300,]
-#temp[temp$plot == "6",]$treatment.fungicide = 2
-temp$treatment.fungicide = as.factor(temp$treatment.fungicide)
-#temp[temp$plot == "5",]$treatment.insecticide = 2
-temp$treatment.insecticide = as.factor(temp$treatment.insecticide)
-temp$statusm = scale(temp$census.start, center = F)
-temp$sizem = scale(temp$fragment.size, center = F)
-temp$logdens = log(temp$census.start)
-temp$logdensm = scale(temp$logdens)
-#temp[is.na(temp$slope.degrees),]$slope.degrees = 5 
-temp$slope.degrees = temp$slope.degrees/100
-temp$slope.degrees = scale(temp$slope.degrees, center = F)
-temp = temp[-c(142,49),]
-
-temp$plotx = temp$plot
-temp[temp$plotx == "2",]$plotx = "1"
-
-mat = rbind(c(-0.5,0.5))
-library(MASS)
-cMat = ginv(mat)
-
-temp2 = temp
-
-fit9b = glmer (proportion.mortality ~ treatment.fungicide*treatment.insecticide*statusm + treatment.fungicide*treatment.insecticide*sizem + slope.degrees + 
-                 (1|location.code/group/plot), weights = census.start, data = temp2, 
-               contrasts = list(treatment.fungicide = cMat,treatment.insecticide = cMat), family="binomial", nAGQ = 0)
-
-
-
-
-
-# SP
-
-
-temp = seedling_census_data[seedling_census_data$census.start >= 1 & seedling_census_data$species == "Climber1",]
-#temp[temp$plot == "6",]$treatment.fungicide = 2
-temp$treatment.fungicide = as.factor(temp$treatment.fungicide)
-#temp[temp$plot == "5",]$treatment.insecticide = 2
-temp$treatment.insecticide = as.factor(temp$treatment.insecticide)
-temp$statusm = scale(temp$census.start, center = F)
-temp$sizem = scale(temp$fragment.size, center = F)
-temp$logdens = log(temp$census.start)
-temp$logdensm = scale(temp$logdens)
-#temp[is.na(temp$slope.degrees),]$slope.degrees = 5 
-temp$slope.degrees = temp$slope.degrees/100
-temp$slope.degrees = scale(temp$slope.degrees, center = F)
-temp = temp[temp$census.start != 49,]
-
-temp$plotx = temp$plot
-temp[temp$plotx == "2",]$plotx = "1"
-
-
-mat = rbind(c(-0.5,0.5))
-library(MASS)
-cMat = ginv(mat)
-
-temp3 = temp
-
-fit9c = glmer (proportion.mortality ~ treatment.fungicide*treatment.insecticide*statusm + slope.degrees + 
-                 (1|group.code/plot), weights = census.start, data = temp3,
-               contrasts = list(treatment.fungicide = cMat,treatment.insecticide = cMat), family="binomial", nAGQ = 0)
-
-
-
-
-
-# Symp
-
-temp = seedling_census_data[seedling_census_data$census.start >= 1 & seedling_census_data$species == "Symp",]
-#temp[temp$plot == "6",]$treatment.fungicide = 2
-temp$treatment.fungicide = as.factor(temp$treatment.fungicide)
-#temp[temp$plot == "5",]$treatment.insecticide = 2
-temp$treatment.insecticide = as.factor(temp$treatment.insecticide)
-temp$statusm = scale(temp$census.start, center = F)
-temp$sizem = scale(temp$fragment.size, center = F)
-temp$logdens = log(temp$census.start)
-temp$logdensm = scale(temp$logdens)
-temp[is.na(temp$slope.degrees),]$slope.degrees = 5 
-temp$slope.degrees = temp$slope.degrees/100
-temp$slope.degrees = scale(temp$slope.degrees, center = F)
-temp = temp[temp$species != "Symp" | temp$plot != "5" | temp$census.start != 15,]
-
-temp$plotx = temp$plot
-temp[temp$plotx == "2",]$plotx = "1"
-
-mat = rbind(c(-0.5,0.5))
-library(MASS)
-cMat = ginv(mat)
-
-temp4 = temp
-
-fit9d = glmer (proportion.mortality ~ treatment.fungicide*treatment.insecticide*statusm + slope.degrees +
-                 (1|location.code/group/plot), weights = census.start, data = temp4,
-               contrasts = list(treatment.fungicide = cMat, treatment.insecticide = cMat), family="binomial", nAGQ = 0)
-
-
-
-
-
-
-# VM
-
-temp = seedling_census_data[seedling_census_data$census.start >= 1 & seedling_census_data$species == "FLC",]
-temp = temp[temp$census.start < 60,]
-
-#temp[temp$plot == "6",]$treatment.fungicide = 2
-temp$treatment.fungicide = as.factor(temp$treatment.fungicide)
-#temp[temp$plot == "5",]$treatment.insecticide = 2
-temp$treatment.insecticide = as.factor(temp$treatment.insecticide)
-temp$statusm = scale(temp$census.start, center = F)
-temp$sizem = scale(temp$fragment.size, center = F)
-temp$logdens = log(temp$census.start)
-temp$logdensm = scale(temp$logdens)
-#temp[is.na(temp$slope.degrees),]$slope.degrees = 5 
-temp$slope.degrees = temp$slope.degrees/100
-temp$slope.degrees = scale(temp$slope.degrees, center = F)
-
-temp$plotx = temp$plot
-temp[temp$plotx == "2",]$plotx = "1"
-
-mat = rbind(c(-0.5,0.5))
-library(MASS)
-cMat = ginv(mat)
-
-temp5 = temp
-
-fit9e = glmer (proportion.mortality ~ treatment.fungicide*treatment.insecticide + statusm + slope.degrees + (1|location.code/group),
-               weights = census.start, data = temp5, contrasts = list(treatment.fungicide = cMat, treatment.insecticide = cMat),
-               family="binomial", nAGQ = 0)
-
-
-
-
-
-# all others
-
-y = table(seedling_census_data[seedling_census_data$census.start != 0,]$species)
-y = y[y>=5]
-
-temp = seedling_census_data[seedling_census_data$census.start >= 1 & seedling_census_data$species != "SR" & seedling_census_data$species != "Symp" & 
-                 seedling_census_data$species != "Climber1" & seedling_census_data$species != "SC" & seedling_census_data$species %in% names(y),]
-temp = temp[temp$species != "Hopea" & temp$species != "Artoh" & temp$species != "Palm",]
-temp = temp[temp$species != "FLC",]
-
-#temp[temp$plot == "6",]$treatment.fungicide = 2
-temp$treatment.fungicide = as.factor(temp$treatment.fungicide)
-#temp[temp$plot == "5",]$treatment.insecticide = 2
-temp$treatment.insecticide = as.factor(temp$treatment.insecticide)
-temp$statusm = scale(temp$census.start, center = F)
-#temp$AOm = scale(temp$AO, center = F)
-temp$sizem = scale(temp$fragment.size, center = F)
-temp$logdens = log(temp$census.start)
-temp$logdensm = scale(temp$logdens)
-temp[is.na(temp$slope.degrees),]$slope.degrees = 5 
-temp$slope.degrees = temp$slope.degrees/100
-temp$slope.degrees = scale(temp$slope.degrees, center = F)
-
-temp$plotx = temp$plot
-temp[temp$plotx == "2",]$plotx = "1"
-
-mat = rbind(c(-0.5,0.5))
-library(MASS)
-cMat = ginv(mat)
-
-temp6 = temp
-
-fit9f = glmer (proportion.mortality ~ treatment.fungicide*treatment.insecticide*statusm + treatment.fungicide*treatment.insecticide*sizem + slope.degrees + (1|species) + (0 + statusm|species) +
-                 (1|location.code/group/plot), weights = census.start, data = temp6,
-               contrasts = list(treatment.fungicide = cMat,treatment.insecticide = cMat), family="binomial", nAGQ = 0)
-
-
-
-
-
-##################### plotting - all species ######################
-
-
-
-temp1$pred = predict(fit9a, type = "response", re.form = NA, allow.new.levels=TRUE)
-
-a = predict(fit9a, type = "response", re.form = NA)
-b = predict(fit9a, type = "response")
-c = b - a
-temp1$newproportion.mortality = temp1$proportion.mortality - c
-temp1[temp1$newproportion.mortality > 1,]$newproportion.mortality = 1
-temp1[temp1$newproportion.mortality < 0,]$newproportion.mortality = 0
-
-temp1$predm = 0
-temp1$sel = 0
-temp1$ser = 0
-
-
-ltemp = temp1
-
-predFun = function(fit) {
-  predict(fit,ltemp, re.form = NA, allow.new.levels=TRUE)
-}
-
-bb = bootMer(fit9a,nsim=100,FUN=predFun)
-
-for (i in 1:length(temp1$proportion.mortality))
-{
-  temp1$predm[i] = binomial()$linkinv(median(bb$t[,i]))
-  temp1$sel[i] = binomial()$linkinv(median(bb$t[,i]) - sd(bb$t[,i]))
-  temp1$ser[i] = binomial()$linkinv(median(bb$t[,i]) + sd(bb$t[,i]))
-}
-
-ggp = ggplot(temp1, aes(x = census.start, y = predm, col = as.factor(plotx)))  +
-  geom_point(size = 2) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F) +
-  geom_smooth(aes(x = census.start, y = sel, col = as.factor(plotx)), method = "glm", method.args = list(family = "binomial"), se = F) +
-  
-  geom_smooth(aes(x = census.start, y = ser, col = as.factor(plotx)), method = "glm", method.args = list(family = "binomial"), se = F)
-
-##### 1
-
-selribx = ggplot_build(ggp)$data[[3]]$x[1:80]
-selriby = ggplot_build(ggp)$data[[3]]$y[1:80]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[1:80]
-serriby = ggplot_build(ggp)$data[[4]]$y[1:80]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp1[temp1$treatment.control == 1,]$proportion.mortality),replace = T),]
-temp1$selribx[temp1$treatment.control == 1] = srib$selribx
-temp1$selriby[temp1$treatment.control == 1] = srib$selriby
-temp1$serriby[temp1$treatment.control == 1] = srib$serriby
-
-##### 2
-
-selribx = ggplot_build(ggp)$data[[3]]$x[81:160]
-selriby = ggplot_build(ggp)$data[[3]]$y[81:160]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[81:160]
-serriby = ggplot_build(ggp)$data[[4]]$y[81:160]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp1[temp1$plot == "5",]$proportion.mortality),replace = T),]
-temp1$selribx[temp1$plot == "5"] = srib$selribx
-temp1$selriby[temp1$plot == "5"] = srib$selriby
-temp1$serriby[temp1$plot == "5"] = srib$serriby
-
-##### 3
-
-selribx = ggplot_build(ggp)$data[[3]]$x[161:240]
-selriby = ggplot_build(ggp)$data[[3]]$y[161:240]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[161:240]
-serriby = ggplot_build(ggp)$data[[4]]$y[161:240]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp1[temp1$plot == "6",]$proportion.mortality),replace = T),]
-temp1$selribx[temp1$plot == "6"] = srib$selribx
-temp1$selriby[temp1$plot == "6"] = srib$selriby
-temp1$serriby[temp1$plot == "6"] = srib$serriby
-
-##### 4
-
-selribx = ggplot_build(ggp)$data[[3]]$x[241:320]
-selriby = ggplot_build(ggp)$data[[3]]$y[241:320]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[241:320]
-serriby = ggplot_build(ggp)$data[[4]]$y[241:320]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp1[temp1$plot == "7",]$proportion.mortality),replace = T),]
-temp1$selribx[temp1$plot == "7"] = srib$selribx
-temp1$selriby[temp1$plot == "7"] = srib$selriby
-temp1$serriby[temp1$plot == "7"] = srib$serriby
-
-
-
-ggp = ggplot(temp1, aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab("") +
-  ylab("") 
-ggp1 = ggp + 
-  #ggtitle("all species") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10)) +
-  theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank(),
-        axis.title.y = element_blank(), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-
-
-
-##################### plotting - SR ######################
-
-
-
-temp2$pred = predict(fit9b, type = "response", re.form = NA, allow.new.levels=TRUE)
-
-a = predict(fit9b, type = "response", re.form = NA)
-b = predict(fit9b, type = "response")
-c = b - a
-temp2$newproportion.mortality = temp2$proportion.mortality - c
-temp2[temp2$newproportion.mortality > 1,]$newproportion.mortality = 1
-temp2[temp2$newproportion.mortality < 0,]$newproportion.mortality = 0
-
-temp2$predm = 0
-temp2$sel = 0
-temp2$ser = 0
-
-
-ltemp = temp2
-
-predFun = function(fit) {
-  predict(fit,ltemp, re.form = NA, allow.new.levels=TRUE)
-}
-
-bb = bootMer(fit9b,nsim=100,FUN=predFun)
-
-for (i in 1:length(temp2$proportion.mortality))
-{
-  temp2$predm[i] = binomial()$linkinv(median(bb$t[,i]))
-  temp2$sel[i] = binomial()$linkinv(median(bb$t[,i]) - sd(bb$t[,i]))
-  temp2$ser[i] = binomial()$linkinv(median(bb$t[,i]) + sd(bb$t[,i]))
-}
-
-ggp = ggplot(temp2, aes(x = census.start, y = predm, col = as.factor(plotx)))  +
-  geom_point(size = 2) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F) +
-  geom_smooth(aes(x = census.start, y = sel, col = as.factor(plotx)), method = "glm", method.args = list(family = "binomial"), se = F) +
-  
-  geom_smooth(aes(x = census.start, y = ser, col = as.factor(plotx)), method = "glm", method.args = list(family = "binomial"), se = F)
-
-##### 1
-
-selribx = ggplot_build(ggp)$data[[3]]$x[1:80]
-selriby = ggplot_build(ggp)$data[[3]]$y[1:80]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[1:80]
-serriby = ggplot_build(ggp)$data[[4]]$y[1:80]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp2[temp2$treatment.control == 1,]$proportion.mortality),replace = T),]
-temp2$selribx[temp2$treatment.control == 1] = srib$selribx
-temp2$selriby[temp2$treatment.control == 1] = srib$selriby
-temp2$serriby[temp2$treatment.control == 1] = srib$serriby
-
-##### 2
-
-selribx = ggplot_build(ggp)$data[[3]]$x[81:160]
-selriby = ggplot_build(ggp)$data[[3]]$y[81:160]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[81:160]
-serriby = ggplot_build(ggp)$data[[4]]$y[81:160]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp2[temp2$plot == "5",]$proportion.mortality),replace = T),]
-temp2$selribx[temp2$plot == "5"] = srib$selribx
-temp2$selriby[temp2$plot == "5"] = srib$selriby
-temp2$serriby[temp2$plot == "5"] = srib$serriby
-
-##### 3
-
-selribx = ggplot_build(ggp)$data[[3]]$x[161:240]
-selriby = ggplot_build(ggp)$data[[3]]$y[161:240]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[161:240]
-serriby = ggplot_build(ggp)$data[[4]]$y[161:240]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp2[temp2$plot == "6",]$proportion.mortality),replace = T),]
-temp2$selribx[temp2$plot == "6"] = srib$selribx
-temp2$selriby[temp2$plot == "6"] = srib$selriby
-temp2$serriby[temp2$plot == "6"] = srib$serriby
-
-##### 4
-
-selribx = ggplot_build(ggp)$data[[3]]$x[241:320]
-selriby = ggplot_build(ggp)$data[[3]]$y[241:320]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[241:320]
-serriby = ggplot_build(ggp)$data[[4]]$y[241:320]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp2[temp2$plot == "7",]$proportion.mortality),replace = T),]
-temp2$selribx[temp2$plot == "7"] = srib$selribx
-temp2$selriby[temp2$plot == "7"] = srib$selriby
-temp2$serriby[temp2$plot == "7"] = srib$serriby
-
-
-
-ggp = ggplot(temp2, aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab("") +
-  ylab(expression(paste(italic("Syzygium rubicundum"))))
-ggp2 = ggp + 
-  #ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_blank(), axis.text.x = element_text(size = 9),
-        axis.title.y = element_blank(), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-
-
-
-
-##################### plotting - SP ######################
-
-
-
-temp3$pred = predict(fit9c, type = "response", re.form = NA, allow.new.levels=TRUE)
-
-a = predict(fit9c, type = "response", re.form = NA)
-b = predict(fit9c, type = "response")
-c = b - a
-temp3$newproportion.mortality = temp3$proportion.mortality - c
-temp3[temp3$newproportion.mortality > 1,]$newproportion.mortality = 1
-#temp3[temp3$newproportion.mortality < 0,]$newproportion.mortality = 0
-
-temp3$predm = 0
-temp3$sel = 0
-temp3$ser = 0
-
-
-ltemp = temp3
-
-predFun = function(fit) {
-  predict(fit,ltemp, re.form = NA, allow.new.levels=TRUE)
-}
-
-bb = bootMer(fit9c,nsim=100,FUN=predFun)
-
-for (i in 1:length(temp3$proportion.mortality))
-{
-  temp3$predm[i] = binomial()$linkinv(median(bb$t[,i]))
-  temp3$sel[i] = binomial()$linkinv(median(bb$t[,i]) - sd(bb$t[,i]))
-  temp3$ser[i] = binomial()$linkinv(median(bb$t[,i]) + sd(bb$t[,i]))
-}
-
-ggp = ggplot(temp3, aes(x = census.start, y = predm, col = as.factor(plotx)))  +
-  geom_point(size = 2) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F) +
-  geom_smooth(aes(x = census.start, y = sel, col = as.factor(plotx)), method = "glm", method.args = list(family = "binomial"), se = F) +
-  
-  geom_smooth(aes(x = census.start, y = ser, col = as.factor(plotx)), method = "glm", method.args = list(family = "binomial"), se = F)
-
-##### 1
-
-selribx = ggplot_build(ggp)$data[[3]]$x[1:80]
-selriby = ggplot_build(ggp)$data[[3]]$y[1:80]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[1:80]
-serriby = ggplot_build(ggp)$data[[4]]$y[1:80]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp3[temp3$treatment.control == 1,]$proportion.mortality),replace = T),]
-temp3$selribx[temp3$treatment.control == 1] = srib$selribx
-temp3$selriby[temp3$treatment.control == 1] = srib$selriby
-temp3$serriby[temp3$treatment.control == 1] = srib$serriby
-
-##### 2
-
-selribx = ggplot_build(ggp)$data[[3]]$x[81:160]
-selriby = ggplot_build(ggp)$data[[3]]$y[81:160]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[81:160]
-serriby = ggplot_build(ggp)$data[[4]]$y[81:160]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp3[temp3$plot == "5",]$proportion.mortality),replace = T),]
-temp3$selribx[temp3$plot == "5"] = srib$selribx
-temp3$selriby[temp3$plot == "5"] = srib$selriby
-temp3$serriby[temp3$plot == "5"] = srib$serriby
-
-##### 3
-
-selribx = ggplot_build(ggp)$data[[3]]$x[161:240]
-selriby = ggplot_build(ggp)$data[[3]]$y[161:240]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[161:240]
-serriby = ggplot_build(ggp)$data[[4]]$y[161:240]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp3[temp3$plot == "6",]$proportion.mortality),replace = T),]
-temp3$selribx[temp3$plot == "6"] = srib$selribx
-temp3$selriby[temp3$plot == "6"] = srib$selriby
-temp3$serriby[temp3$plot == "6"] = srib$serriby
-
-##### 4
-
-selribx = ggplot_build(ggp)$data[[3]]$x[241:320]
-selriby = ggplot_build(ggp)$data[[3]]$y[241:320]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[241:320]
-serriby = ggplot_build(ggp)$data[[4]]$y[241:320]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp3[temp3$plot == "7",]$proportion.mortality),replace = T),]
-temp3$selribx[temp3$plot == "7"] = srib$selribx
-temp3$selriby[temp3$plot == "7"] = srib$selriby
-temp3$serriby[temp3$plot == "7"] = srib$serriby
-
-
-
-ggp = ggplot(temp3, aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab("") +
-  ylab("")
-ggp3 = ggp + 
-  #ggtitle("Spatholobus purpureus") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_blank(), axis.text.x = element_text(size = 9),
-        axis.title.y = element_blank(), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,100)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-
-
-##################### plotting - all other species ######################
-
-
-
-temp6$pred = predict(fit9f, type = "response", re.form = NA, allow.new.levels=TRUE)
-
-a = predict(fit9f, type = "response", re.form = NA)
-b = predict(fit9f, type = "response")
-c = b - a
-temp6$newproportion.mortality = temp6$proportion.mortality - c
-temp6[temp6$newproportion.mortality > 1,]$newproportion.mortality = 1
-temp6[temp6$newproportion.mortality < 0,]$newproportion.mortality = 0
-
-temp6$predm = 0
-temp6$sel = 0
-temp6$ser = 0
-
-
-ltemp = temp6
-
-predFun = function(fit) {
-  predict(fit,ltemp, re.form = NA, allow.new.levels=TRUE)
-}
-
-bb = bootMer(fit9f,nsim=100,FUN=predFun)
-
-for (i in 1:length(temp6$proportion.mortality))
-{
-  temp6$predm[i] = binomial()$linkinv(median(bb$t[,i]))
-  temp6$sel[i] = binomial()$linkinv(median(bb$t[,i]) - sd(bb$t[,i]))
-  temp6$ser[i] = binomial()$linkinv(median(bb$t[,i]) + sd(bb$t[,i]))
-}
-
-ggp = ggplot(temp6, aes(x = census.start, y = predm, col = as.factor(plotx)))  +
-  geom_point(size = 2) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F) +
-  geom_smooth(aes(x = census.start, y = sel, col = as.factor(plotx)), method = "glm", method.args = list(family = "binomial"), se = F) +
-  
-  geom_smooth(aes(x = census.start, y = ser, col = as.factor(plotx)), method = "glm", method.args = list(family = "binomial"), se = F)
-
-##### 1
-
-selribx = ggplot_build(ggp)$data[[3]]$x[1:80]
-selriby = ggplot_build(ggp)$data[[3]]$y[1:80]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[1:80]
-serriby = ggplot_build(ggp)$data[[4]]$y[1:80]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp6[temp6$treatment.control == 1,]$proportion.mortality),replace = T),]
-temp6$selribx[temp6$treatment.control == 1] = srib$selribx
-temp6$selriby[temp6$treatment.control == 1] = srib$selriby
-temp6$serriby[temp6$treatment.control == 1] = srib$serriby
-
-##### 2
-
-selribx = ggplot_build(ggp)$data[[3]]$x[81:160]
-selriby = ggplot_build(ggp)$data[[3]]$y[81:160]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[81:160]
-serriby = ggplot_build(ggp)$data[[4]]$y[81:160]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp6[temp6$plot == "5",]$proportion.mortality),replace = T),]
-temp6$selribx[temp6$plot == "5"] = srib$selribx
-temp6$selriby[temp6$plot == "5"] = srib$selriby
-temp6$serriby[temp6$plot == "5"] = srib$serriby
-
-##### 3
-
-selribx = ggplot_build(ggp)$data[[3]]$x[161:240]
-selriby = ggplot_build(ggp)$data[[3]]$y[161:240]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[161:240]
-serriby = ggplot_build(ggp)$data[[4]]$y[161:240]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp6[temp6$plot == "6",]$proportion.mortality),replace = T),]
-temp6$selribx[temp6$plot == "6"] = srib$selribx
-temp6$selriby[temp6$plot == "6"] = srib$selriby
-temp6$serriby[temp6$plot == "6"] = srib$serriby
-
-##### 4
-
-selribx = ggplot_build(ggp)$data[[3]]$x[241:320]
-selriby = ggplot_build(ggp)$data[[3]]$y[241:320]
-
-serribx = ggplot_build(ggp)$data[[4]]$x[241:320]
-serriby = ggplot_build(ggp)$data[[4]]$y[241:320]
-
-srib = cbind(selribx,selriby,serriby)
-srib = as.data.frame(srib)
-
-srib = srib[sample(nrow(srib),length(temp6[temp6$plot == "7",]$proportion.mortality),replace = T),]
-temp6$selribx[temp6$plot == "7"] = srib$selribx
-temp6$selriby[temp6$plot == "7"] = srib$selriby
-temp6$serriby[temp6$plot == "7"] = srib$serriby
-
-
-
-ggp = ggplot(temp6, aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab("conspecific density (per square-meter)") 
-ggp4 = ggp + 
-  #ggtitle("all other species") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10)) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_blank(), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,50)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-
-
-
-############################
-
-
-library(gridExtra)
-library(grid)
-
-grid_arrange_shared_legend1 <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(top = textGrob("all species", rot=0, vjust = 1,
-                              gp = gpar(fontfamily = "serif", fontsize = 10, col = 'black')),
-               do.call(arrangeGrob, c(lapply(plots, function(x)
-                 x + theme(legend.position="none")), list(nrow = 1))),
-               ncol = 1,
-               heights = unit.c(unit(0.895, "npc") - lheight, lheight))
-}
-
-grid_arrange_shared_legend2 <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(top = textGrob(expression(paste(italic("Syzygium rubicundum"))), rot=0, vjust = 0,
-                              gp = gpar(fontfamily = "serif", fontsize = 10, col = 'black')),
-               do.call(arrangeGrob, c(lapply(plots, function(x)
-                 x + theme(legend.position="none")), list(nrow = 1))),
-               ncol = 1,
-               heights = unit.c(unit(0.895, "npc") - lheight, lheight))
-}
-
-grid_arrange_shared_legend3 <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(top = textGrob(expression(paste(italic("Spatholobus purpureus"))), rot=0, vjust = 0,
-                              gp = gpar(fontfamily = "serif", fontsize = 10, col = 'black')),
-               do.call(arrangeGrob, c(lapply(plots, function(x)
-                 x + theme(legend.position="none")), list(nrow = 1))),
-               ncol = 1,
-               heights = unit.c(unit(0.895, "npc") - lheight, lheight))
-}
-
-grid_arrange_shared_legend4 <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(top = textGrob("all other species", rot=0, vjust = 1,
-                              gp = gpar(fontfamily = "serif", fontsize = 10, col = 'black')),
-               do.call(arrangeGrob, c(lapply(plots, function(x)
-                 x + theme(legend.position="none")), list(nrow = 1))),
-               legend,
-               ncol = 1,
-               heights = unit.c(unit(0.895, "npc") - lheight, lheight))
-}
-
-p1 = grid_arrange_shared_legend2(ggp2)
-p2 = grid_arrange_shared_legend3(ggp3)
-p3 = grid_arrange_shared_legend4(ggp4)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-g = gridExtra::arrangeGrob(p1,p2,p3,nrow=3,ncol=1, 
-                            left=grid::textGrob("probability of mortality - germination to establishment", rot=90, gp = gpar(fontfamily = "serif", fontsize = 12, col = 'black'))) ; 
-  #grid::grid.newpage() ; 
-
-jpeg('density_dependence.jpg', units="in", width=5, height=7, res=1000)
-grid::grid.draw(g)
-dev.off()
-
-
-
-
-
-
-
-
-
-
-################ For presentation FUNGI ###################
-
-## empty SR with only fungi
-
-ggpw = ggplot(temp2[temp2$treatment.insecticide != 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  #geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  #geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  #geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggpw1 = ggpw + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-ggp = ggplot(temp2[temp2$treatment.insecticide != 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggp1 = ggp + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-grid_arrange_shared_legend <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(
-    do.call(arrangeGrob, c(lapply(plots[2], function(x)
-      x + theme(legend.position="none")), list(nrow = 1))),
-    legend,
-    ncol = 1,
-    heights = unit.c(unit(1, "npc") - lheight, lheight))
-}
-
-p = grid_arrange_shared_legend(ggp1,ggpw1)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-#g = gridExtra::arrangeGrob(p,ncol=1) ; 
-#grid::grid.newpage() ; 
-
-tiff('C:/Users/ashwinv/Desktop/a.tiff', units="in", width=8, height=6, res=1000)
-grid_arrange_shared_legend(ggp1,ggpw1)
-dev.off()
-
-
-
-## only control
-
-ggpw = ggplot(temp2[temp2$treatment.control == 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggpw1 = ggpw + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-ggp = ggplot(temp2[temp2$plotx != "7",], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggp1 = ggp + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-grid_arrange_shared_legend <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(
-    do.call(arrangeGrob, c(lapply(plots[2], function(x)
-      x + theme(legend.position="none")), list(nrow = 1))),
-    legend,
-    ncol = 1,
-    heights = unit.c(unit(1, "npc") - lheight, lheight))
-}
-
-p = grid_arrange_shared_legend(ggp1,ggpw1)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-#g = gridExtra::arrangeGrob(p,ncol=1) ; 
-#grid::grid.newpage() ; 
-
-tiff('C:/Users/ashwinv/Desktop/a.tiff', units="in", width=8, height=6, res=1000)
-grid_arrange_shared_legend(ggp1,ggpw1)
-dev.off()
-
-
-
-
-## control and fungicide
-
-ggpw = ggplot(temp2[temp2$treatment.insecticide != 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggpw1 = ggpw + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-ggp = ggplot(temp2[temp2$plotx != "7",], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggp1 = ggp + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-grid_arrange_shared_legend <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(
-    do.call(arrangeGrob, c(lapply(plots[2], function(x)
-      x + theme(legend.position="none")), list(nrow = 1))),
-    legend,
-    ncol = 1,
-    heights = unit.c(unit(1, "npc") - lheight, lheight))
-}
-
-p = grid_arrange_shared_legend(ggp1,ggpw1)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-#g = gridExtra::arrangeGrob(p,ncol=1) ; 
-#grid::grid.newpage() ; 
-
-tiff('C:/Users/ashwinv/Desktop/a.tiff', units="in", width=8, height=6, res=1000)
-grid_arrange_shared_legend(ggp1,ggpw1)
-dev.off()
-
-
-
-## control and fungicide and insecticide
-
-ggpw = ggplot(temp2[temp2$plotx != "7",], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggpw1 = ggpw + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-ggp = ggplot(temp2[temp2$plotx != "7",], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggp1 = ggp + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,300)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-grid_arrange_shared_legend <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(
-    do.call(arrangeGrob, c(lapply(plots[2], function(x)
-      x + theme(legend.position="none")), list(nrow = 1))),
-    legend,
-    ncol = 1,
-    heights = unit.c(unit(1, "npc") - lheight, lheight))
-}
-
-p = grid_arrange_shared_legend(ggp1,ggpw1)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-#g = gridExtra::arrangeGrob(p,ncol=1) ; 
-#grid::grid.newpage() ; 
-
-tiff('C:/Users/ashwinv/Desktop/a.tiff', units="in", width=8, height=6, res=1000)
-grid_arrange_shared_legend(ggp1,ggpw1)
-dev.off()
-
-
-
-
-
-
-
-
-
-
-
-
-
-################ For presentation INSECTS ###################
-
-## empty SR with only insects
-
-ggpw = ggplot(temp2[temp2$treatment.fungicide != 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  #geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  #geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  #geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggpw1 = ggpw + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,200)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-ggp = ggplot(temp2[temp2$treatment.fungicide != 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggp1 = ggp + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,200)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-grid_arrange_shared_legend <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(
-    do.call(arrangeGrob, c(lapply(plots[2], function(x)
-      x + theme(legend.position="none")), list(nrow = 1))),
-    legend,
-    ncol = 1,
-    heights = unit.c(unit(1, "npc") - lheight, lheight))
-}
-
-p = grid_arrange_shared_legend(ggp1,ggpw1)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-#g = gridExtra::arrangeGrob(p,ncol=1) ; 
-#grid::grid.newpage() ; 
-
-tiff('C:/Users/ashwinv/Desktop/a.tiff', units="in", width=8, height=6, res=1000)
-grid_arrange_shared_legend(ggp1,ggpw1)
-dev.off()
-
-
-
-## only control
-
-ggpw = ggplot(temp2[temp2$treatment.control == 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggpw1 = ggpw + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,200)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-ggp = ggplot(temp2[temp2$treatment.fungicide != 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggp1 = ggp + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,200)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-grid_arrange_shared_legend <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(
-    do.call(arrangeGrob, c(lapply(plots[2], function(x)
-      x + theme(legend.position="none")), list(nrow = 1))),
-    legend,
-    ncol = 1,
-    heights = unit.c(unit(1, "npc") - lheight, lheight))
-}
-
-p = grid_arrange_shared_legend(ggp1,ggpw1)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-#g = gridExtra::arrangeGrob(p,ncol=1) ; 
-#grid::grid.newpage() ; 
-
-tiff('C:/Users/ashwinv/Desktop/a.tiff', units="in", width=8, height=6, res=1000)
-grid_arrange_shared_legend(ggp1,ggpw1)
-dev.off()
-
-
-
-
-## control and insecticide
-
-ggpw = ggplot(temp2[temp2$treatment.fungicide != 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggpw1 = ggpw + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,200)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-ggp = ggplot(temp2[temp2$treatment.fungicide != 1,], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggp1 = ggp + 
-  ggtitle("Syzygium rubicundum") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,200)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#009E73","#D55E00","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-grid_arrange_shared_legend <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(
-    do.call(arrangeGrob, c(lapply(plots[2], function(x)
-      x + theme(legend.position="none")), list(nrow = 1))),
-    legend,
-    ncol = 1,
-    heights = unit.c(unit(1, "npc") - lheight, lheight))
-}
-
-p = grid_arrange_shared_legend(ggp1,ggpw1)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-#g = gridExtra::arrangeGrob(p,ncol=1) ; 
-#grid::grid.newpage() ; 
-
-tiff('C:/Users/ashwinv/Desktop/a.tiff', units="in", width=8, height=6, res=1000)
-grid_arrange_shared_legend(ggp1,ggpw1)
-dev.off()
-
-
-
-########## Spatholobus #########
-
-
-
-## control and fungicide and insecticide
-
-ggpw = ggplot(temp3[temp3$plotx != "7",], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggpw1 = ggpw + 
-  ggtitle("Spatholobus purpureus") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,100)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-ggp = ggplot(temp3[temp3$plotx != "7",], aes(x = census.start, y = predm, col = as.factor(plotx), fill = as.factor(plotx)))  +
-  geom_point(aes(x = census.start, y = newproportion.mortality, col = as.factor(plotx)), size = 0.5) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"), se = F, linewidth = 0.5) +
-  geom_ribbon(aes(x = selribx, ymin = selriby,ymax = serriby, linetype = NA), alpha=0.1) +
-  xlab(expression(paste(conspecific~density~"/"~m^2))) +
-  ylab("per-capita mortality")
-
-
-ggp1 = ggp + 
-  ggtitle("Spatholobus purpureus") +
-  theme(plot.title = element_text(hjust = 0.5, size = 10, face = 'italic')) +
-  theme(axis.title.x = element_text(vjust = -2, size = 12), axis.text.x = element_text(size = 9),
-        axis.title.y = element_text(vjust = 1, angle = 90, size = 12), axis.text.y = element_text(size = 9)) +
-  theme(legend.title = element_text(size = 0, face = "bold"), legend.text = element_text(size = 8))+
-  #theme(strip.background = element_rect(colour=NULL, fill=NA)) +
-  theme(strip.text.x = element_text(size = 12, face = "bold")) +
-  scale_size(guide = 'none') +
-  scale_x_continuous(limits = c(1,100)) +
-  scale_y_continuous(limits = c(0,1), breaks = c(0,0.2,0.4,0.6,0.8,1)) +
-  scale_color_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                     name="",
-                     breaks=c("1","6","5","7"),
-                     labels=c("control","insecticide","fungicide","combined")) +
-  scale_fill_manual(values = c("#56B4E9","#D55E00","#009E73","#CC79A7"),
-                    name="",
-                    breaks=c("1","6","5","7"),
-                    labels=c("control","insecticide","fungicide","combined"))
-
-grid_arrange_shared_legend <- function(...) {
-  plots <- list(...)
-  g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
-  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
-  lheight <- sum(legend$height)
-  grid.arrange(
-    do.call(arrangeGrob, c(lapply(plots[2], function(x)
-      x + theme(legend.position="none")), list(nrow = 1))),
-    legend,
-    ncol = 1,
-    heights = unit.c(unit(1, "npc") - lheight, lheight))
-}
-
-p = grid_arrange_shared_legend(ggp1,ggpw1)
-
-#, bottom=grid::textGrob("conspecific density (per square-meter)") top=grid::textGrob("seedling mortality from germination to establishment",
-#g = gridExtra::arrangeGrob(p,ncol=1) ; 
-#grid::grid.newpage() ; 
-
-tiff('C:/Users/ashwinv/Desktop/a.tiff', units="in", width=8, height=6, res=1000)
-grid_arrange_shared_legend(ggp1,ggpw1)
-dev.off()
+```{r sessioninfo}
+sessionInfo()
 ```

@@ -21,6 +21,9 @@
 vignettes/*.html
 vignettes/*.pdf
 
+code/Kadumane_seedling_CDD_cache/
+code/Kadumane_seedling_CDD_files/
+
 # OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
 .httr-oauth
 
